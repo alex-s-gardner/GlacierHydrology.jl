@@ -60,8 +60,11 @@ Scripts load the package with `import GlacierHydrology` and qualify every name
 - **GEMB runs and physics members:** `gemb_info(; gemb_run_id, physics_member)`.
   - Run 9 is the production sweep (`$CLIMATE_CACHE/tile_runs_v2/<member>/`).
   - Run 10 is the pilot (`tile_runs_pilot`), on `gemb_pilot_forcing_grid`.
-  - A physics member such as `B-kfit-table-w2-g2.5` names the grain-growth, decoupling, impurity and wind
-    levels of the sweep, plus a precipitation gradient applied here (`gemb_physics_member_parts`).
+  - A physics member such as `S-kfit-table` names the grain-growth, decoupling and impurity levels of the
+    sweep, with optional wind (`w<factor>`, `ws`) and precipitation-gradient (`g<g>`, applied here)
+    tokens (`gemb_physics_member_parts`). Production uses GEMB_GlacierSims' default member,
+    `gemb_reference_physics_member = "S-kfit-table"`: GEMB's default snow set, ERA5-Land wind and no
+    gradient.
   - Calibrated outputs of a member go to `gemb_physics/<member>/` beside the altimetry files
     (`gemb_physics_path`).
 - **Calibration cost:** the RMS of the residual blended with its seasonal amplitude

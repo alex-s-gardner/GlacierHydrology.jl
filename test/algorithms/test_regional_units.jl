@@ -172,7 +172,7 @@ using Dates
 
         @testset "runs2rgi_physics: GEMB physics members as a dimension beside the runs" begin
             # Two members' syntheses of the same run, the second with twice the accumulation.
-            members = ["B-kfit-table-w2-g2.5", "C-kfit-table-w2-g2.5"]
+            members = ["S-kfit-table", "C-kfit-table"]
             twice = deepcopy(out)
             foreach(x -> x .*= 2, twice.acc)
             for (m, synthesis) in zip(members, (out, twice))

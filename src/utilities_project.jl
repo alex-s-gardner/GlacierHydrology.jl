@@ -62,11 +62,11 @@ function ensemble_paths(; geotile_width=2, physics_member=gemb_reference_physics
     )
 end
 # The GEMB physics member (GEMB_GlacierSims `physics_member`) the reported fluxes are calibrated
-# against: Flanner & Zender (2006) grain growth with 350 kg m-3 fresh snow, the fitted band decoupling
-# factor, the regional background impurity table and band wind × 2 (tile member `B-kfit-table-w2`), with
-# a band precipitation gradient of 2.5 % per 100 m applied at calibration. The other members are
-# sensitivities to it. The gradient is defined for the pilot sweep (GEMB run 10) only.
-const gemb_reference_physics_member = "B-kfit-table-w2-g2.5"
+# against: GEMB_GlacierSims' default, `S-kfit-table`. That is GEMB's default snow set (Flanner & Zender
+# 2006 grain growth, SNOTEL-calibrated van Kampenhout et al. 2017 fresh snow, Crocus densification with
+# destructive metamorphism at 100 kg m-3), the fitted band decoupling factor, the regional background
+# impurity table, ERA5-Land wind and no precipitation gradient. Other members are sensitivities to it.
+const gemb_reference_physics_member = "S-kfit-table"
 
 # The forcing grid GEMB run 10 (the pilot sweep) is calibrated on: 7 temperature offsets [K] by 9
 # precipitation scalings. Pilot tiles run on the dense grid carry these nodes among others and are read
@@ -88,7 +88,7 @@ Configuration of a GEMB_GlacierSims tile sweep.
 # Arguments
 - `gemb_run_id::Int`: 9, the production sweep in `$CLIMATE_CACHE/tile_runs_v2`, or 10, the pilot sweep
   in `$CLIMATE_CACHE/tile_runs_pilot` on its own forcing grid and tile subset.
-- `physics_member`: the GEMB_GlacierSims physics member (e.g. `"B-kfit-table"`, see
+- `physics_member`: the GEMB_GlacierSims physics member (e.g. `"S-kfit-table"`, see
   [`gemb_reference_physics_member`](@ref)). Each run holds one tile sweep per member, under
   `<tile_dir>/<tile member>`, with a combined file of its own, so no tile of another member or sweep can
   enter the ensemble. A run-10 member with a precipitation gradient (`"<tile member>-g<g>"`,

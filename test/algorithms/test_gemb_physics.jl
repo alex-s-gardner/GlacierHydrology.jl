@@ -55,9 +55,9 @@ end
 @testset "GEMB physics members" begin
     @testset "member ids and folders" begin
         @test GlacierHydrology.check_gemb_physics_member("C-kfit-table") == "C-kfit-table"
-        @test GlacierHydrology.check_gemb_physics_member(GlacierHydrology.gemb_reference_physics_member) == "B-kfit-table-w2-g2.5"
+        @test GlacierHydrology.check_gemb_physics_member(GlacierHydrology.gemb_reference_physics_member) == "S-kfit-table"
         @test GlacierHydrology.gemb_physics_member_parts(GlacierHydrology.gemb_reference_physics_member) ==
-              (; tile_member="B-kfit-table-w2", precipitation_gradient=2.5)
+              (; tile_member="S-kfit-table", precipitation_gradient=0.0)
         for bad in ("C_ks35_table", "C-ks35", "C/ks35-table", "", :C, "C-kfit-table-g2.5-g5",
                     "C-kfit-g2.5", "C-g2-table")
             @test_throws "is not a GEMB physics member id" GlacierHydrology.check_gemb_physics_member(bad)

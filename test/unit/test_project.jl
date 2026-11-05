@@ -9,36 +9,37 @@ using Statistics
 
 @testset "Project configuration" begin
     @testset "gemb_info" begin
-        # Runs 9 and 10 hold one sweep per physics member. The reference carries a precipitation
-        # gradient, which only the pilot sweep (run 10) defines, so run 9 is read at the reference's
-        # tile member.
+        # Runs 9 and 10 hold one sweep per physics member. The reference member carries no
+        # precipitation gradient; a gradient member (only the pilot sweep, run 10, defines them) reads
+        # its tile member's directory under a combined file of its own.
         ref = GlacierHydrology.gemb_reference_physics_member
-        ref_tiles = GlacierHydrology.gemb_physics_member_parts(ref).tile_member
-        @test GlacierHydrology.gemb_physics_member_parts(ref).precipitation_gradient > 0
-        tile_info(gemb_run_id) = gemb_run_id == 9 ? GlacierHydrology.gemb_info(; gemb_run_id, physics_member=ref_tiles) :
-                                 GlacierHydrology.gemb_info(; gemb_run_id, physics_member=ref)
+        @test GlacierHydrology.gemb_physics_member_parts(ref) == (; tile_member=ref, precipitation_gradient=0.0)
+        grad = GlacierHydrology.gemb_physics_member_id(ref, 2.5)
         for gemb_run_id in (9, 10)
-            tiles = tile_info(gemb_run_id)
+            tiles = GlacierHydrology.gemb_info(; gemb_run_id, physics_member=ref)
             @test tiles.tile_dir isa AbstractString
             @test !occursin("\$", tiles.filename_gemb_combined)
             @test endswith(tiles.filename_gemb_combined, ".jld2")
+            @test tiles.physics_member == ref
         end
 
         # Each tile run reads its own directory and writes its own combined file.
-        tile_runs = [tile_info(gemb_run_id) for gemb_run_id in (9, 10)]
-        @test allunique(getproperty.(tile_runs, :tile_dir))
-        @test allunique(getproperty.(tile_runs, :filename_gemb_combined))
-        @test splitpath(tile_info(9).tile_dir)[end-1:end] == ["tile_runs_v2", ref_tiles]
-        @test splitpath(tile_info(10).tile_dir)[end-1:end] == ["tile_runs_pilot", ref_tiles]
-        @test tile_info(9).physics_member == ref_tiles
-        @test tile_info(10).physics_member == ref
-        @test occursin(ref, tile_info(10).filename_gemb_combined)
-        @test_throws "defined for the pilot sweep (GEMB run 10) only" GlacierHydrology.gemb_info(; gemb_run_id=9, physics_member=ref)
+        run9 = GlacierHydrology.gemb_info(; gemb_run_id=9, physics_member=ref)
+        run10 = GlacierHydrology.gemb_info(; gemb_run_id=10, physics_member=ref)
+        run10_grad = GlacierHydrology.gemb_info(; gemb_run_id=10, physics_member=grad)
+        @test allunique(getproperty.((run9, run10, run10_grad), :filename_gemb_combined))
+        @test run9.tile_dir != run10.tile_dir
+        @test splitpath(run9.tile_dir)[end-1:end] == ["tile_runs_v2", ref]
+        @test splitpath(run10.tile_dir)[end-1:end] == ["tile_runs_pilot", ref]
+        @test run10_grad.tile_dir == run10.tile_dir
+        @test run10_grad.physics_member == grad
+        @test occursin(grad, run10_grad.filename_gemb_combined)
+        @test_throws "defined for the pilot sweep (GEMB run 10) only" GlacierHydrology.gemb_info(; gemb_run_id=9, physics_member=grad)
         # The pilot is read on its own grid, which every pilot tile carries, and a gradient member on the
         # geotile-mean nodes its bands stay on; production on the tiles' own.
-        @test GlacierHydrology.gemb_info(; gemb_run_id=10, physics_member=ref_tiles).forcing_grid == GlacierHydrology.gemb_pilot_forcing_grid
-        @test tile_info(10).forcing_grid == GlacierHydrology.gemb_pilot_gradient_forcing_grid
-        @test isnothing(tile_info(9).forcing_grid)
+        @test run10.forcing_grid == GlacierHydrology.gemb_pilot_forcing_grid
+        @test run10_grad.forcing_grid == GlacierHydrology.gemb_pilot_gradient_forcing_grid
+        @test isnothing(run9.forcing_grid)
         @test 1.0 in GlacierHydrology.gemb_pilot_forcing_grid.pscale && 0.0 in GlacierHydrology.gemb_pilot_forcing_grid.ΔT
 
         # Each physics member of a run has its own directory and combined file, and a member is required.
@@ -51,8 +52,8 @@ using Statistics
         @test_throws "is not a GEMB physics member id" GlacierHydrology.gemb_info(; gemb_run_id=9, physics_member="C_ks35_table")
         @test_throws "is not a GEMB physics member id" GlacierHydrology.gemb_info(; gemb_run_id=9, physics_member="../x-y-z")
 
-        @test_throws "unrecognized gemb_run_id" GlacierHydrology.gemb_info(; gemb_run_id=8, physics_member=ref_tiles)
-        @test_throws "unrecognized gemb_run_id" GlacierHydrology.gemb_info(; gemb_run_id=11, physics_member=ref_tiles)
+        @test_throws "unrecognized gemb_run_id" GlacierHydrology.gemb_info(; gemb_run_id=8, physics_member=ref)
+        @test_throws "unrecognized gemb_run_id" GlacierHydrology.gemb_info(; gemb_run_id=11, physics_member=ref)
     end
 
     @testset "file_is_current" begin
