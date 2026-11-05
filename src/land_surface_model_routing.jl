@@ -18,7 +18,6 @@ begin
     import GlacierVolumeChange as GVC
     using NCDatasets
     using Rasters
-    using Arrow
     using DataFrames
     import GeoInterface as GI
     using CairoMakie

@@ -9,42 +9,23 @@ using Statistics
 
 @testset "Project configuration" begin
     @testset "gemb_info" begin
-        # Every point-run entry must be constructible: the pscale and Δheight grids carry one
-        # label per value, and filename_gemb_combined resolves its interpolated id.
-        for gemb_run_id in 1:6
-            g = GGA.gemb_info(; gemb_run_id)
-
-            @test length(g.precipitation_scale) == length(dims(g.precipitation_scale, :pscale))
-            @test length(g.elevation_delta) == length(dims(g.elevation_delta, :Δheight))
-
-            @test !occursin("\$", g.filename_gemb_combined)
-            @test occursin(g.file_uniqueid, g.filename_gemb_combined)
-            @test endswith(g.filename_gemb_combined, ".jld2")
-
-            @test g.modify_melt_only isa Bool
-        end
-
-        # The tile path has a different shape: its forcing axes live in the data, so it declares a
-        # directory to read instead of a precipitation grid and an elevation-class list. Runs 9 and 10
-        # hold one sweep per physics member. The reference carries a precipitation gradient, which only
-        # the pilot sweep (run 10) defines, so run 9 is read at the reference's tile member.
+        # Runs 9 and 10 hold one sweep per physics member. The reference carries a precipitation
+        # gradient, which only the pilot sweep (run 10) defines, so run 9 is read at the reference's
+        # tile member.
         ref = GGA.gemb_reference_physics_member
         ref_tiles = GGA.gemb_physics_member_parts(ref).tile_member
         @test GGA.gemb_physics_member_parts(ref).precipitation_gradient > 0
         tile_info(gemb_run_id) = gemb_run_id == 9 ? GGA.gemb_info(; gemb_run_id, physics_member=ref_tiles) :
-                                 gemb_run_id == 10 ? GGA.gemb_info(; gemb_run_id, physics_member=ref) :
-                                 GGA.gemb_info(; gemb_run_id)
-        for gemb_run_id in (7, 8, 9, 10)
+                                 GGA.gemb_info(; gemb_run_id, physics_member=ref)
+        for gemb_run_id in (9, 10)
             tiles = tile_info(gemb_run_id)
             @test tiles.tile_dir isa AbstractString
-            @test isnothing(tiles.precipitation_scale)
             @test !occursin("\$", tiles.filename_gemb_combined)
             @test endswith(tiles.filename_gemb_combined, ".jld2")
-            @test tiles.modify_melt_only isa Bool
         end
 
         # Each tile run reads its own directory and writes its own combined file.
-        tile_runs = [tile_info(gemb_run_id) for gemb_run_id in (7, 8, 9, 10)]
+        tile_runs = [tile_info(gemb_run_id) for gemb_run_id in (9, 10)]
         @test allunique(getproperty.(tile_runs, :tile_dir))
         @test allunique(getproperty.(tile_runs, :filename_gemb_combined))
         @test splitpath(tile_info(9).tile_dir)[end-1:end] == ["tile_runs_v2", ref_tiles]
@@ -60,19 +41,18 @@ using Statistics
         @test isnothing(tile_info(9).forcing_grid)
         @test 1.0 in GGA.gemb_pilot_forcing_grid.pscale && 0.0 in GGA.gemb_pilot_forcing_grid.ΔT
 
-        # Each physics member of a run has its own directory and combined file, and a member is
-        # required where there are members and refused where there are none.
+        # Each physics member of a run has its own directory and combined file, and a member is required.
         members = ["B-kfit-table", "C-kfit-table", "C-kshaw-table"]
         infos = [GGA.gemb_info(; gemb_run_id=9, physics_member=m) for m in members]
         @test allunique(getproperty.(infos, :tile_dir))
         @test allunique(getproperty.(infos, :filename_gemb_combined))
         @test all(occursin(m, i.filename_gemb_combined) for (m, i) in zip(members, infos))
         @test_throws "GEMB run 9 holds one tile sweep per physics member; pass physics_member" GGA.gemb_info(; gemb_run_id=9)
-        @test_throws "GEMB run 8 has no physics members" GGA.gemb_info(; gemb_run_id=8, physics_member=ref)
         @test_throws "is not a GEMB physics member id" GGA.gemb_info(; gemb_run_id=9, physics_member="C_ks35_table")
         @test_throws "is not a GEMB physics member id" GGA.gemb_info(; gemb_run_id=9, physics_member="../x-y-z")
 
-        @test_throws "unrecognized gemb_run_id" GGA.gemb_info(; gemb_run_id=11)
+        @test_throws "unrecognized gemb_run_id" GGA.gemb_info(; gemb_run_id=8, physics_member=ref_tiles)
+        @test_throws "unrecognized gemb_run_id" GGA.gemb_info(; gemb_run_id=11, physics_member=ref_tiles)
     end
 
     @testset "file_is_current" begin

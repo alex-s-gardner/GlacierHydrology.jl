@@ -42,18 +42,15 @@ begin
     using GeometryBasics
     using DimensionalData.Lookups
     import DimensionalData as DD
-    using Colors
     using BinStatistics
     using LibGEOS # was not able to use GeometryOps for union
     #using Tyler
     using Extents
-    using StaticArrays
     using Downloads
     using NCDatasets
     using Unitful
     using Dates
     using ColorSchemes
-    using Format
     # Load local configuration paths
     paths = GGA.pathlocal
 

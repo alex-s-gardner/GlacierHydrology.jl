@@ -541,53 +541,6 @@ function show_error_bar_table(regional_results; cols2display=3)
 end
 
 
-"""
-    plot_dh_gemb_ensemble(gemb_dv, area_km2; geotile = "", title_prefix = "")
-
-Plot area-normalized height change ensemble results from GEMB model diagnostics.
-
-# Arguments
-- `gemb_dv`: Dictionary or NamedTuple of GEMB diagnostic variables, each as a DimArray with `:pscale` and `:ΔT` dimensions.
-- `area_km2`: DimArray or array representing the area (in km²) for normalization.
-- `geotile`: (Optional) String identifier for the geotile being plotted (used in plot titles).
-- `title_prefix`: (Optional) String prefix for plot titles.
-
-# Returns
-- `figures`: Dictionary mapping each variable name to its corresponding Makie figure.
-
-Each figure shows the area-normalized height change for every combination of precipitation scaling
-(`pscale`) and air temperature offset (`ΔT`, in K), with a legend indicating the parameter pair.
-"""
-function plot_dh_gemb_ensemble(gemb_dv, area_km2; geotile = "", title_prefix="")
-    area_total = sum(parent(area_km2))
-    vars2plot = keys(gemb_dv)
-    dpscale = dims(gemb_dv[first(vars2plot)], :pscale)
-    dΔT = dims(gemb_dv[first(vars2plot)], :ΔT)
-    clrs = Makie.resample_cmap(:thermal, length(dpscale) * length(dΔT) + 1)
-    figures = Dict()
-
-    for var0 in vars2plot
-        figures[var0] = _publication_figure(columns=1, rows=1)
-        title = "$(title_prefix) $(var0)-$(geotile)"
-        ax = CairoMakie.Axis(figures[var0][1, 1]; title)
-        ax.ytickformat = values -> ["$(round(Int,value))m" for value in values]
-
-        cnt = 1
-        for pscale in dpscale
-            for ΔT in dΔT
-                dh = gemb_dv[var0][pscale=At(pscale), ΔT=At(ΔT)] ./ area_total
-                height_range, = validrange(.!isnan.(dh))
-                lines!(ax, dh[height_range]; label="p:$(pscale) ΔT:$(ΔT)K", color=clrs[cnt])
-                cnt += 1
-            end
-        end
-
-        axislegend(ax, position=:lt, patchsize=(20.0f0, 1.0f0), padding=(5.0f0, 5.0f0, 5.0f0, 5.0f0), labelsize=12, rowgap=1) # orientation=:horizontal, framevisible=false)
-    end
-
-    return figures
-end
-
 
 
 """

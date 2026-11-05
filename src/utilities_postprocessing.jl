@@ -254,7 +254,7 @@ function rgi_trends(regional_sum::AbstractDict, discharge_rgi, daterange)
                 end
 
                 # first fit linear trend and seasonal [this creates less spread in linear fit as acceleration fixed to zero]
-                dm_fit = curve_fit(offset_trend_seasonal2, x, y, p3)
+                dm_fit = curve_fit(offset_trend_seasonal2, x, y, p_offset_trend_seasonal)
                 region_fit[At(varname), At(binned_synthesized_file), At(rgi), At("trend")] = dm_fit.param[2]
 
                 # then fit linear trend and acceleration and seasonal
@@ -344,7 +344,7 @@ function rgi_trends(da::AbstractDimArray, daterange)
     for rgi in drgi
 
         # first fit linear trend and seasonal [this creates less spread in linear fit as acceleration fixed to zero]
-        dm_fit = curve_fit(offset_trend_seasonal2, d, da[At(rgi), minimum(daterange)..maximum(daterange)], p3)
+        dm_fit = curve_fit(offset_trend_seasonal2, d, da[At(rgi), minimum(daterange)..maximum(daterange)], p_offset_trend_seasonal)
         region_fit[At(rgi), At("trend")] = dm_fit.param[2]
 
         # then fit linear trend and acceleration and seasonal

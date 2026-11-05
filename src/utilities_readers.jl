@@ -60,50 +60,6 @@ function glacier_discharge()
     return df
 end
 
-"""
-    wimberly2024(; filename = pathlocal[:wimberly_2024])
-
-Loads and processes glacier model data from Wimberly et al. 2024.
-
-# Arguments
-- `filename`: Path to the CSV file containing the data (default: pathlocal[:wimberly_2024])
-
-# Returns
-- A DimArray containing glacier model runoff data in units of [km^3] organized by date, 
-  GCM, SSP, basin, and model type. The function parses the combined GCM_SSP_Basin column 
-  into separate dimensions and structures the data from three glacier models 
-  (GloGEM, PyGEM, OGGM) into a DimArray.
-"""
-function wimberly2024(; filename=setpaths().wimberly_2024)
-
-    df = CSV.read(filename, DataFrame)
-
-    # split the GCM_SSP_Basin column into three columns
-    df = transform(df, [:GCM_SSP_Basin] => ByRow(x -> split(x, "_")) => [:GCM, :SSP, :Basin])
-
-    ddate = Ti(sort!(unique(df.Date)))
-    dgcm = Dim{:GCM}(unique(df.GCM))
-    dssp = Dim{:SSP}(unique(df.SSP))
-    dbasin = Dim{:Basin}(unique(df.Basin))
-    dmodel = Dim{:Model}(["GloGEM", "PyGEM", "OGGM"])
-
-    gdf = groupby(df, [:GCM, :SSP, :Basin])
-
-    da = zeros(ddate, dgcm, dssp, dbasin, dmodel)
-
-    for gcm in dgcm
-        for ssp in dssp
-            for basin in dbasin
-                for model in dmodel
-                    da[At(gdf[(gcm, ssp, basin)][:, :Date]), At(gcm), At(ssp), At(basin), At(model)] = gdf[(gcm, ssp, basin)][:, model]
-                end
-            end
-        end
-    end
-
-    return da
-end
-
 
 """
     read_grace_rgi(; path2file=setpaths()[:grace_rgi])

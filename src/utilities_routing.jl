@@ -1,5 +1,5 @@
 # Standard libraries
-using Random, LinearAlgebra, SparseArrays
+using LinearAlgebra
 # Geospatial libraries
 import GeoInterface as GI, GeometryOps as GO, LibGEOS as LG
 import Proj, ArchGDAL
@@ -273,23 +273,6 @@ function to_latlong_polygon(cap::UnitSphericalCap, n_points::Int)
     points = GeographicFromUnitCartesian().(spherical_cap_edge_points(cap, n_points))
     return GI.Polygon([GI.LinearRing(points)]; crs=GFT.EPSG(4326))
 end
-
-#=
-# Disabled: importing MakieCore here makes the package unprecompilable. Makie and MakieCore both
-# define `deepcopy(::Observables.Observable)`, and the resulting method overwriting is an error
-# during module precompilation. Plot a cap by converting it with `to_latlong_polygon` instead.
-#
-import MakieCore
-function MakieCore.convert_arguments(::Type{MakieCore.Mesh}, cap::UnitSphericalCap)
-    # get the edge points
-    points = spherical_cap_edge_points(cap, 50, 1.0)
-    # add the center point
-    push!(points, cap.point)
-    # create the faces
-    faces = [GeometryBasics.TriangleFace(i, i + 1, length(points)) for i in 1:(length(points)-2)]
-    return (GeometryBasics.normal_mesh(points, faces),)
-end
-=#
 
 function trace_downstream(start_id::Integer, ids, next_ids; maxiters=length(ids))
     # prog = ProgressUnknown(; dt = 0.1, desc = "Tracing downstream...")

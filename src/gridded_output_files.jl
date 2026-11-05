@@ -41,29 +41,9 @@ end
 # Synthesis parameters of input data
 for geotile_width_out in [0.5, 2]
 begin
-    path2runs_filled, params = GVC.binned_filled_filepaths(;
-        project_id,
-        surface_masks=["glacier", "glacier_rgi7"],
-        dem_ids=["best", "cop30_v2"],
-        curvature_corrects=[false, true],
-        amplitude_corrects=[true],
-        binning_methods=["median", "nmad3", "nmad5"],
-        fill_params=[1, 2, 3, 4],
-        binned_folders=[GVC.analysis_paths(; geotile_width).binned, replace(GVC.analysis_paths(; geotile_width).binned, "binned" => "binned_unfiltered")],
-        include_existing_files_only=true
-    )
-
-    path2runs_synthesized = replace.(path2runs_filled, "aligned.jld2" => "synthesized.jld2")
-
-    reference_ensemble_file = GVC.reference_ensemble_file
-        
-    binned_synthesized_dv_files = GGA.gemb_physics_path.(replace.(path2runs_synthesized, ".jld2" => "_gembfit_dv.jld2"),
-                                                         GGA.gemb_reference_physics_member)
-    binned_synthesized_dv_file_ref = GGA.gemb_physics_path(replace(reference_ensemble_file, "_aligned.jld2" => "_synthesized_gembfit_dv.jld2"),
-                                                           GGA.gemb_reference_physics_member)
-        
-    path2ref = binned_synthesized_dv_file_ref
-    path2files = setdiff(binned_synthesized_dv_files, [binned_synthesized_dv_file_ref])
+    ens = GGA.ensemble_paths(; geotile_width)
+    path2ref = ens.gembfit_dv_ref
+    path2files = setdiff(ens.gembfit_dv, [path2ref])
 
 
     # set to be start of record for instantanious (not cumulative) error calculation

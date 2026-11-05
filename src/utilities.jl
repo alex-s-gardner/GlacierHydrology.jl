@@ -1,114 +1,4 @@
 
-"""
-    dilate(mask::AbstractArray, radius::Int)
-
-Expands (radius > 0) or shrinks (radius < 0) the foreground regions of a mask.
-- If radius is positive, it performs Dilation.
-- If radius is negative, it performs Erosion using the absolute value of the radius.
-- If radius is 0, it returns a copy of the original mask.
-"""
-function dilate(mask::AbstractArray{T,N}, radius::Int) where {T,N}
-    if radius == 0
-        return copy(mask)
-    end
-
-    mask_out = copy(mask)
-    indices = CartesianIndices(mask)
-    r = abs(radius)
-
-    for I in indices
-        # Define the local neighborhood bounds
-        lower_bound = max(first(indices), I - CartesianIndex(fill(r, N)...))
-        upper_bound = min(last(indices), I + CartesianIndex(fill(r, N)...))
-
-        neighborhood = @view mask[lower_bound:upper_bound]
-
-        if radius > 0
-            # Dilation logic: Set to 1 if ANY neighbor is non-zero
-            if any(!iszero, neighborhood)
-                mask_out[I] = one(T)
-            end
-        else
-            # Erosion logic: Set to 0 if ANY neighbor is zero (i.e., NOT ALL are non-zero)
-            if !all(!iszero, neighborhood)
-                mask_out[I] = zero(T)
-            end
-        end
-    end
-
-    return mask_out
-end
-
-"""
-    true_block_size(v::AbstractVector{Bool})
-
-Returns an Int vector where each element represents the length of the 
-contiguous block of `true` values it belongs to. `false` values return 0.
-"""
-function true_block_size(v::AbstractVector{Bool})
-    n = length(v)
-    result = zeros(Int, n)
-
-    i = 1
-    while i <= n
-        if v[i]
-            # Start of a true block
-            start_idx = i
-            while i <= n && v[i]
-                i += 1
-            end
-            # End of block reached
-            block_len = i - start_idx
-
-            # Fill the result indices for this block
-            for j in start_idx:(i-1)
-                result[j] = block_len
-            end
-        else
-            # It's a false value, result[i] is already 0 from zeros()
-            i += 1
-        end
-    end
-
-    return result
-end
-
-"""
-    mask_rasterize(feature, extent::Extent, resolution; target_crs=EPSG(4326), source_crs=EPSG(4326), boundary=:center) -> BitMatrix
-
-Convert vector features to a binary raster mask for a given geographic extent and resolution.
-
-# Arguments
-- `feature`: Vector geometry feature(s) to rasterize
-- `extent::Extent`: Geographic extent of the output raster
-- `resolution`: Tuple or NamedTuple specifying pixel size (e.g., (X=0.001, Y=0.001))
-
-# Keywords
-- `target_crs=EPSG(4326)`: Coordinate reference system for the output raster
-- `source_crs=EPSG(4326)`: Coordinate reference system of the input features
-- `boundary=:center`: Method for determining pixel coverage (`:center`, `:touch`, or `:contains`)
-
-# Returns
-- `BitMatrix`: Binary mask where `true` indicates presence of the feature
-"""
-function mask_rasterize(feature, extent::Extent, resolution; target_crs=EPSG(4326), source_crs=EPSG(4326), boundary=:center)
-
-    if source_crs !== target_crs
-        println("reporjecting vector file... this could take awhile")
-        feature = GeometryOps.reproject(feature; target_crs)
-    end
-
-    x = X(extent.X[1]:resolution[1]:extent.X[2]);
-    y = Y(extent.Y[1]:resolution[2]:extent.Y[2]);
-    A = Raster(zeros(UInt8, y, x))
-    setcrs(A, target_crs)
-
-    # NOTE: count method is fastest
-    mask = Rasters.rasterize!(count, A, feature; threaded=false, shape=:polygon, progress=false, verbose=false, boundary=boundary) .> 0
-
-    return mask
-end
-
 
 const MATLAB_EPOCH = Dates.DateTime(-1, 12, 31)
 
@@ -765,36 +655,6 @@ unit_convert["m3 s^-1"] = u"m^3/s"
 unit_convert["kg s^-1"] = u"kg/s"
 
 
-function _trim_data(data::DimArray, geotile_ids)
-    return data[geotile = At(geotile_ids)]
-end
-
-function _trim_data(data::DataFrame, geotile_ids)
-
-    if in("id",names(data))
-        index, _ = intersectindices(data.id, geotile_ids)   
-    elseif in("geotile",names(data))
-        index, _ = intersectindices(data.geotile, geotile_ids)
-    else
-        error("data must have a column named 'id' or 'geotile'")
-    end
-    return data[index, :]
-end
-
-function _trim_data(f::Dict{String, Any}, geotile_ids)
-    dgeotile = dims(f["dh_hyps"]["hugonnet"], :geotile)
-    if length(dgeotile) != length(geotile_ids)
-        for k1 in keys(f)
-        #k1 = first(keys(f))
-            for k2 in keys(f[k1])
-            #k2 = first(keys(f[k1]))
-                f[k1][k2] = _trim_data(f[k1][k2], geotile_ids)
-            end
-        end
-    end
-    return f
-end
-
 """
     _geotile_load_align(; surface_mask="glacier", geotile_width=2, geotile_order=nothing)
 
@@ -888,6 +748,7 @@ function ts_seasonal_model(ts; interval=nothing)
     return (;trend, amplitude, phase_peak_month)
 end
 
+
 """
     calculate_slope(data::DimArray)
 
@@ -941,7 +802,6 @@ function calculate_slope(data::DimArray)
     slope = numerator / denominator
     return slope
 end
-
 
 function add_single_rgi_column!(df)
 

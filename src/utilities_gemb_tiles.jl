@@ -37,8 +37,7 @@ const _GEMB_KM3_PER_KM2_M = 1e-3
 const _GEMB_TIME_EPOCH = DateTime(1950, 1, 1)
 
 # Layers `process_gemb_tiles` builds directly. `smb`, `runoff` and `dv` are derived from these by
-# `gemb_add_derived_vars!`, which the driver applies before saving so the file matches the `.mat`
-# path's contents.
+# `gemb_add_derived_vars!`, which the driver applies before saving.
 const GEMB_TILE_LAYERS = (:fac, :acc, :refreeze, :melt, :rain, :ec)
 
 # Band layers read from each tile file. The `dh` layers are `-cumsum(ice_flux)` and already cumulative;
@@ -299,7 +298,7 @@ height" into one weight per band, so an area-weighted total becomes a single `se
 
 `area_km2` is one geotile's hypsometry over `project_height_bins` centers. A bin holding ice that no
 band covers is filled by linear interpolation in height across the bands that do, held constant beyond
-the outermost band -- the rule `process_gemb_geotiles` applies. That fill is linear in the band values
+the outermost band. That fill is linear in the band values
 and the area weighting is linear in the filled values, so the composition is a fixed linear functional
 of the band series and `w` is that functional.
 
@@ -580,12 +579,10 @@ end
     process_gemb_tiles(geotiles, area_km2; tile_dir, date_center, show_stats=true, max_donor_distance_km=2000,
                        physics_member=nothing, forcing_grid=nothing)
 
-Build the GEMB volume-change ensemble from `GEMB_GlacierSims` tile NetCDF, as a drop-in for
-`process_gemb_geotiles`.
+Build the GEMB volume-change ensemble from `GEMB_GlacierSims` tile NetCDF.
 
 Returns a `DimStack` of [`GEMB_TILE_LAYERS`](@ref) over `(geotile, date, pscale, ΔT)` in km³ of ice
-equivalent. `smb`, `runoff` and `dv` are added later by `gemb_add_derived_vars!`, as with the `.mat`
-path. The stack's metadata `"tile_provenance"` is the [`gemb_tile_provenance`](@ref) of the tile files
+equivalent. `smb`, `runoff` and `dv` are added later by `gemb_add_derived_vars!`. The stack's metadata `"tile_provenance"` is the [`gemb_tile_provenance`](@ref) of the tile files
 read, donors included, which must all have been run as `physics_member` (see
 [`gemb_tile_provenance`](@ref)), and every tile must share the first tile's forcing grid.
 

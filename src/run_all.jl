@@ -19,7 +19,7 @@
 # 21.  Produce regional results for analysis and sharing
 # 22.  Generate extended data figures for manuscript
 # 23.  Analyze population affected by glacier-fed river changes
-# 24.  Create output files for the manuscript
+# 24.  Create gridded output files for the manuscript
 #
 # Implements checkpoint logic to avoid redundant processing, allowing efficient restarts.
 begin
@@ -40,20 +40,16 @@ begin
     gemb_physics_member = GGA.gemb_reference_physics_member
 
     # Glacier volume change: one product per ensemble member, written by GVC.create_dataset
-    volume_dataset = GVC.VolumeDatasetConfig(; geotile_width)
-    path2runs_filled = GVC.ensemble_members(volume_dataset)
-    reference_ensemble_file = GVC.reference_member()
-    # Glacier inventory of the reference member. The glacier-level products (steps 15-24) spread the
-    # reference member's geotile values over this inventory's glaciers.
-    surface_mask_ref = GVC.binned_filled_fileparts(reference_ensemble_file).surface_mask
-    # Every surface mask among the altimetry members; GEMB is binned, adjusted and calibrated per mask.
-    surface_masks = unique(getproperty.(GVC.binned_filled_fileparts.(path2runs_filled), :surface_mask))
-
-    path2runs_synthesized = replace.(path2runs_filled, "aligned.jld2" => "synthesized.jld2")
-    binned_synthesized_dv_files = GGA.gemb_physics_path.(replace.(path2runs_synthesized, ".jld2" => "_gembfit_dv.jld2"),
-                                                         gemb_physics_member)
-    binned_synthesized_dv_file_ref = GGA.gemb_physics_path(replace(reference_ensemble_file, "_aligned.jld2" => "_synthesized_gembfit_dv.jld2"),
-                                                           gemb_physics_member)
+    ens = GGA.ensemble_paths(; geotile_width, physics_member=gemb_physics_member)
+    path2runs_filled = ens.filled
+    reference_ensemble_file = ens.filled_ref
+    path2runs_synthesized = ens.synthesized
+    binned_synthesized_dv_files = ens.gembfit_dv
+    binned_synthesized_dv_file_ref = ens.gembfit_dv_ref
+    # GEMB is binned, adjusted and calibrated per surface mask; the glacier-level products (steps 15-24)
+    # spread the reference member's geotile values over its own inventory's glaciers.
+    surface_masks = ens.surface_masks
+    surface_mask_ref = ens.surface_mask_ref
 end
 
 # 11. Create glacier model (GEMB) classes for each geotile
@@ -172,8 +168,8 @@ include("manuscript_extended_data_figures.jl")
 # 23. Analyze population affected by glacier-fed river changes using buffer analysis [~5hrs]
 include("river_buffer_population.jl")
 
-# 24. Create output files for the manuscript
-include("create_output_files.jl")
+# 24. Create gridded output files for the manuscript
+include("gridded_output_files.jl")
 
 # run on local machine to copy over figures to my computer
 #=

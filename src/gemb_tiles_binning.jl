@@ -7,9 +7,6 @@
 # used in one place: a geotile the sweep does not cover borrows the nearest tile, whose bands need not
 # line up with the target's ice.
 #
-# The forcing matrix's second axis is a temperature offset in K (`:ΔT`), where the `.mat` path used a
-# melt multiplier (`:mscale`). Downstream code detects which it is from the sign of the axis values.
-#
 # Output: one DimStack per surface mask over (geotile, date, pscale, ΔT) in km³ of ice equivalent,
 # area-weighted by that mask's hypsometry, saved as "gemb_dv" with its "surface_mask" and the
 # "tile_provenance" of the tile files read (`GGA.gemb_tile_provenance`) to
@@ -111,7 +108,8 @@ for surface_mask in gemb_surface_masks
 
     gemb_dv0 = GGA.gemb_add_derived_vars!(gemb_dv0)
 
-    # The same gates the `.mat` path asserts. They are cheap and they have caught real problems.
+    # Physical gates on the ensemble: no NaN at 2000, cumulative fluxes never decrease, refreeze never
+    # exceeds melt.
     for k in keys(gemb_dv0)
         if any(isnan.(gemb_dv0[k][date=Near(Date(2000, 1, 1))]))
             error("$(surface_mask): NaN found in $(k) for nearest Date(2000,1,1)")

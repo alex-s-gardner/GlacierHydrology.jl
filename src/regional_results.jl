@@ -33,7 +33,6 @@
 # - Analysis of endorheic vs. ocean-draining glacier contributions
 
 # NOTE: errors are at the 95% confidence interval from the reference run for this study and 95% confidence interval from GRACE
-#function regional_results(path2runs_synthesized, ensemble_reference_file; error_quantile=0.95, error_scaling=1.5)
 begin
     error_quantile=0.95
     error_scaling=1.5
@@ -52,8 +51,11 @@ begin
     Unitful.register(GGA.MyUnits)
     using GlobalGlacierAnalysis.MyUnits
 
-    reference_ensemble_file = GVC.reference_ensemble_file;
-    ensemble_reference_file = replace(reference_ensemble_file, "_aligned.jld2" => "_synthesized.jld2")
+    ens = GGA.ensemble_paths()
+    reference_ensemble_file = ens.filled_ref
+    ensemble_reference_file = ens.synthesized_ref
+    path2runs_filled = ens.filled
+    path2runs_synthesized = ens.synthesized
     
     # to include in uncertainty
     paths = GGA.pathlocal
@@ -76,25 +78,13 @@ begin
     glacier_summary_file = GGA.pathlocal[:glacier_summary]
 
     # path2perglacier = replace(ensemble_reference_file, ".jld2" => "_perglacier.jld2")
-    path2discharge = GGA.discharge_global_file(GGA.binned_filled_fileparts(reference_ensemble_file).surface_mask)
+    path2discharge = GGA.discharge_global_file(ens.surface_mask_ref)
     path2rgi_regions = paths[:rgi6_regions_shp]
 
     # glacier inventory of the reference member: the glacier summary and the river routing follow it
-    surface_mask_ref = GGA.binned_filled_fileparts(reference_ensemble_file).surface_mask
+    surface_mask_ref = ens.surface_mask_ref
     path2river_flux = GGA.glacier_rivers_file(surface_mask_ref)
 
-    path2runs_filled, params = GVC.binned_filled_filepaths(;
-        project_id=:v01,
-        surface_masks=["glacier", "glacier_rgi7"],
-        dem_ids=["best", "cop30_v2"],
-        curvature_corrects=[false, true],
-        amplitude_corrects=[true],
-        binning_methods=["median", "nmad3", "nmad5"],
-        fill_params=[1, 2, 3, 4],
-        binned_folders=[GVC.analysis_paths(; geotile_width=2).binned, replace(GVC.analysis_paths(; geotile_width=2).binned, "binned" => "binned_unfiltered")],
-        include_existing_files_only=true
-    )
-    path2runs_synthesized = replace.(path2runs_filled, "aligned.jld2" => "synthesized.jld2")
 end
 
 begin
@@ -363,7 +353,7 @@ begin
         GGA.dimstack2netcdf(regions_out_stack, filename0)
 
         # copy data readme file to project directory
-        cp("/home/gardnera/Documents/GitHub/GlobalGlacierAnalysis.jl/src/Gardner2025_DataReadMe.txt", joinpath(paths[:project_dir], "Gardner2025_DataReadMe.txt"); force=true)
+        cp(joinpath(pkgdir(GGA), "docs", "data_archive", "Gardner2025_DataReadMe.txt"), joinpath(paths[:project_dir], "Gardner2025_DataReadMe.txt"); force=true)
     end
 end
 

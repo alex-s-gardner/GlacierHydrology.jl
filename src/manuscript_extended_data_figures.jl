@@ -27,7 +27,6 @@ begin
     using ProgressMeter
     using NCDatasets
     using FileIO
-    using CFTime
     using GeoDataFrames
     
     # Import functions from utilities
@@ -43,9 +42,12 @@ begin
     #single_geotile_test = "lat[-44-42]lon[+170+172]" # New Zealand
     downscale_to_glacier_method = "area"
     gemb_run_id = 9
+    gemb_physics_member = GGA.gemb_reference_physics_member
 
-    reference_ensemble_file = GVC.reference_ensemble_file;
-    path2runs_synthesized = [replace.(reference_ensemble_file, "aligned.jld2" => "synthesized.jld2")]
+    ens = GGA.ensemble_paths(; geotile_width, physics_member=gemb_physics_member)
+    path2runs_synthesized = [ens.synthesized_ref]
+    ensemble_reference_file = ens.synthesized_ref
+    surface_mask_ref = ens.surface_mask_ref
 
     # data paths
     paths = (
@@ -72,28 +74,27 @@ begin
     glacier_summary_file = GGA.pathlocal[:glacier_summary]
 
     # path2perglacier = replace(ensemble_reference_file, ".jld2" => "_perglacier.jld2")
-    path2discharge = GGA.discharge_global_file(params_ref.surface_mask)
+    path2discharge = GGA.discharge_global_file(surface_mask_ref)
 
    
     path2rgi_regions = GGA.pathlocal[:rgi6_regions_shp]
 
 end;
 
-gemb = GGA.gemb_ensemble_dv(; gemb_run_id, surface_mask=params_ref.surface_mask,
-                            physics_member=GGA.gemb_reference_physics_member);
+gemb = GGA.gemb_ensemble_dv(; gemb_run_id, surface_mask=surface_mask_ref, physics_member=gemb_physics_member);
 
 # 12. Calculate global glacier solid ice discharge, filled Antarctic data with modeled SMB
 discharge = GGA.global_discharge_filled(;
-    surface_mask=params_ref.surface_mask,
-    discharge_global_fn=GGA.discharge_global_file(params_ref.surface_mask),
+    surface_mask=surface_mask_ref,
+    discharge_global_fn=GGA.discharge_global_file(surface_mask_ref),
     gemb,
     discharge2smb_max_latitude=-60,
     discharge2smb_equilibrium_period=(Date(1979), Date(2000)),
     pscale=1,
     ΔT=0,
     geotile_width=2,
-    force_remake_before=GGA.gemb_ensemble_built(GGA.gemb_info(; gemb_run_id, physics_member=GGA.gemb_reference_physics_member),
-                                                [params_ref.surface_mask]),
+    force_remake_before=GGA.gemb_ensemble_built(GGA.gemb_info(; gemb_run_id, physics_member=gemb_physics_member),
+                                                [surface_mask_ref]),
     force_remake_before_hypsometry=nothing
 );
 
@@ -111,9 +112,10 @@ for calibrate_to in calibrate_to
         geotile_grouping_min_feature_area_km2=100,
         single_geotile_test,
         seasonality_weight=GGA.seasonality_weight,
-        distance_from_origin_penalty=1.5,
+        distance_from_origin_penalty=GGA.distance_from_origin_penalty,
         ΔT_to_pscale_weight=GGA.ΔT_to_pscale_weight,
-        force_remake_before=DateTime("2025-01-31T14:00"),
+        force_remake_before=GGA.gemb_ensemble_built(GGA.gemb_info(; gemb_run_id, physics_member=gemb_physics_member),
+                                                    [surface_mask_ref]),
         calibrate_to
     );
 
@@ -148,7 +150,7 @@ begin
     CairoMakie.save(outfile, f)    
 end
 
-# --- Example: compare modeled runoff to external (Rounce 2022) dataset (disabled/block comment) ---
+# Compare modeled runoff with the Rounce et al. PyGEM projections
 begin
     date_range = DateTime(2000, 1, 1).. DateTime(2025, 1, 1)
     scenario = "ssp126"

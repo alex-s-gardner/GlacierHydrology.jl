@@ -9,7 +9,6 @@ using Statistics
 using ProgressMeter
 using NCDatasets
 using FileIO
-using CFTime
 
 """
     load_wgms_data(paths)
