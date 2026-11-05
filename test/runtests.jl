@@ -1,8 +1,8 @@
 using Test
-using GlobalGlacierAnalysis
-import GlobalGlacierAnalysis as GGA
+using GlacierHydrology
+import GlacierHydrology
 
-@testset "GlobalGlacierAnalysis.jl Tests" begin
+@testset "GlacierHydrology.jl Tests" begin
     # Include test helpers
     include("test_helpers.jl")
 

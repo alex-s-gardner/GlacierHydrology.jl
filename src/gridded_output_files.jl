@@ -16,10 +16,10 @@ Output files: Gardner2025_glacier_{resolution}deg.nc
 
 # Import required modules and packages for analysis and plotting
 begin
-    import GlobalGlacierAnalysis as GGA
+    import GlacierHydrology
     import GlacierVolumeChange as GVC
     using Unitful                # Physical units support
-    Unitful.register(GGA.MyUnits) # Register custom units from GGA
+    Unitful.register(GlacierHydrology.MyUnits) # Register the package's Gt unit
     using Dates                  # Date and time handling
     using DimensionalData        # For working with labeled dimensions
     using Rasters                # Raster data support
@@ -41,7 +41,7 @@ end
 # Synthesis parameters of input data
 for geotile_width_out in [0.5, 2]
 begin
-    ens = GGA.ensemble_paths(; geotile_width)
+    ens = GlacierHydrology.ensemble_paths(; geotile_width)
     path2ref = ens.gembfit_dv_ref
     path2files = setdiff(ens.gembfit_dv, [path2ref])
 
@@ -54,9 +54,9 @@ begin
     end
 
     # load in raw synthesis data with errors 
-    geotiles0 = GGA.geotiles_mean_error(path2ref, path2files; error_quantile, error_scaling, reference_period) # returns variables in units of kg/m2 [90s]
+    geotiles0 = GlacierHydrology.geotiles_mean_error(path2ref, path2files; error_quantile, error_scaling, reference_period) # returns variables in units of kg/m2 [90s]
 
-    geotiles_original = GGA.geotiles_mask_hyps("glacier", geotile_width)
+    geotiles_original = GlacierHydrology.geotiles_mask_hyps("glacier", geotile_width)
     geotiles_original[!, :glacier_area_km2] = sum.(geotiles_original[!, :glacier_area_km2])
 end
 
@@ -72,7 +72,7 @@ begin
     geotiled = dims(geotiles0, :geotile)
 
     # Calculate cell area for each cell [m^2]
-    glacier_area = Raster(zeros(lond, latd); crs = GGA.GeoFormatTypes.EPSG(4326))
+    glacier_area = Raster(zeros(lond, latd); crs = GlacierHydrology.GeoFormatTypes.EPSG(4326))
     cell_areas = Rasters.cellarea(glacier_area)
 
     for gt in eachrow(geotiles_out)
@@ -159,7 +159,7 @@ begin
         for gtid in geotiled
             #gtid = geotiled[300]
 
-            ext = GGA.geotile_extent(gtid)
+            ext = GlacierHydrology.geotile_extent(gtid)
 
             foo = ustrip(geotiles0[varname=At(var0), geotile=At(gtid), error=At(false)])
 
@@ -195,32 +195,32 @@ end
 
 begin
     # save output
-    path2outfile = joinpath(GGA.pathlocal[:project_dir], "Gardner2025_glacier_$(geotile_width_out)deg.nc")
+    path2outfile = joinpath(GlacierHydrology.pathlocal[:project_dir], "Gardner2025_glacier_$(geotile_width_out)deg.nc")
 
     # save to disk
-    GGA.dimstack2netcdf(ds, path2outfile; deflatelevel=2, chunksizes=[180, 90, 64])
+    GlacierHydrology.dimstack2netcdf(ds, path2outfile; deflatelevel=2, chunksizes=[180, 90, 64])
 end
 
 
 # sanity check
 begin
-    path2outfile = joinpath(GGA.pathlocal[:project_dir], "Gardner2025_glacier_$(geotile_width_out)deg.nc")
-    ds = GGA.netcdf2dimstack(path2outfile)
+    path2outfile = joinpath(GlacierHydrology.pathlocal[:project_dir], "Gardner2025_glacier_$(geotile_width_out)deg.nc")
+    ds = GlacierHydrology.netcdf2dimstack(path2outfile)
 
     runoff = ds[:runoff][:,:,:] :: DimArray{Float64,3}
     global_runoff = dropdims(sum(runoff, dims=(:X, :Y)), dims=(:X, :Y), )
 
     # slope is per year
     kg2Gt = 1e-12
-    runoff_rate_downscaled = GGA.calculate_slope(cumsum(global_runoff, dims=:Ti)) * kg2Gt # Gt/yr
+    runoff_rate_downscaled = GlacierHydrology.calculate_slope(cumsum(global_runoff, dims=:Ti)) * kg2Gt # Gt/yr
 
-    gts = GGA.geotiles_mask_hyps("glacier", geotile_width)
-    (ia, ib) = GGA.intersectindices(collect(dims(geotiles0, :geotile)), gts.id)
+    gts = GlacierHydrology.geotiles_mask_hyps("glacier", geotile_width)
+    (ia, ib) = GlacierHydrology.intersectindices(collect(dims(geotiles0, :geotile)), gts.id)
 
     foo = geotiles0[varname=At("runoff"), error=At(false)]*1E6 .* sum.(gts[ib, :glacier_area_km2])    
     foo = ustrip(dropdims(sum(foo; dims=:geotile), dims=:geotile))
 
-    runoff_rate_original = GGA.calculate_slope(foo) * kg2Gt # Gt/yr
+    runoff_rate_original = GlacierHydrology.calculate_slope(foo) * kg2Gt # Gt/yr
 
     if (abs(runoff_rate_downscaled - runoff_rate_original) / runoff_rate_original) < 1.5E-3
         printstyled("Average runoff rate of downscaled and original data are within 0.15% of each other\n"; color=:light_green)

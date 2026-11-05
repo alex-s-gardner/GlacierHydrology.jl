@@ -7,8 +7,8 @@ Every expected value is a BigFloat sum over the hand-set per-geotile rates.
 """
 
 using Test
-using GlobalGlacierAnalysis
-import GlobalGlacierAnalysis as GGA
+using GlacierHydrology
+import GlacierHydrology
 using DimensionalData
 import DimensionalData as DD
 using DataFrames
@@ -38,7 +38,7 @@ using Dates
     area_total = 10.0 .+ k
 
     ddate = Dim{:date}(Date(2000, 1, 15):Month(1):Date(2004, 12, 15))
-    Δt = GGA.decimalyear.(ddate) .- GGA.decimalyear(first(ddate))
+    Δt = GlacierHydrology.decimalyear.(ddate) .- GlacierHydrology.decimalyear(first(ddate))
     dgeotile = Dim{:geotile}(ids)
     dheight = Dim{:height}(1050.0:100.0:1450.0)
     dpscale = Dim{:pscale}([1.0, 2.0])
@@ -49,14 +49,14 @@ using Dates
     layer(r) = DimArray([r[g] * p * t for g in eachindex(ids), t in Δt, p in dpscale, _ in dΔT],
                         (dgeotile, ddate, dpscale, dΔT))
     gemb = DimStack((; (Symbol(v) => layer(rate[v]) for v in ("acc", "melt", "refreeze", "ec", "rain", "fac"))...))
-    gemb = GGA.gemb_add_derived_vars!(gemb)
+    gemb = GlacierHydrology.gemb_add_derived_vars!(gemb)
     gemb = DD.maplayers(A -> DD.rebuild(A; metadata=Dict("surface_mask" => "glacier")), gemb)
 
     centers_lon = lon0 .+ 1.0
-    discharge = GGA.discharge2geotile(DataFrame(; longitude=centers_lon, latitude=fill(61.0, n),
+    discharge = GlacierHydrology.discharge2geotile(DataFrame(; longitude=centers_lon, latitude=fill(61.0, n),
                                                 discharge_gtyr), dgeotile; mass2volume=true)
     DD.metadata(discharge)["surface_mask"] = "glacier"
-    GGA.dv_adjust4discharge!(gemb, discharge)
+    GlacierHydrology.dv_adjust4discharge!(gemb, discharge)
 
     area_km2 = DimArray(repeat(area_total ./ length(dheight), 1, length(dheight)), (dgeotile, dheight))
     gemb_fit = DataFrame(; id=ids, pscale=fill(pscale_fit, n), ΔT=zeros(n), group)
@@ -67,12 +67,12 @@ using Dates
 
     mktempdir() do dir
         run = joinpath(dir, "glacier_dh_best_nmad5_v01_filled_ac_p1_synthesized.jld2")
-        GGA.FileIO.save(run, Dict("dh_hyps" => zeros(dgeotile, ddate, dheight)))
-        out = GGA.individual_geotile_synthesis_gembfit_dv(run, gemb, gemb_fit, discharge, geotiles0, area_km2)
-        GGA.FileIO.save(replace(run, ".jld2" => "_gembfit_dv.jld2"), Dict("geotiles" => out))
+        GlacierHydrology.FileIO.save(run, Dict("dh_hyps" => zeros(dgeotile, ddate, dheight)))
+        out = GlacierHydrology.individual_geotile_synthesis_gembfit_dv(run, gemb, gemb_fit, discharge, geotiles0, area_km2)
+        GlacierHydrology.FileIO.save(replace(run, ".jld2" => "_gembfit_dv.jld2"), Dict("geotiles" => out))
 
         # The run has no physics members, so its synthesis is beside it.
-        regional = GGA.runs2rgi([run]; physics_member=nothing)
+        regional = GlacierHydrology.runs2rgi([run]; physics_member=nothing)
 
         # Hand values. km³ ice equivalent -> Gt is ×917/1000.
         ρ = big"917"
@@ -112,7 +112,7 @@ using Dates
             @test all(colmetadata(out, v, "units") == "km3 [i.e.]" for v in ("acc", "runoff", "smb", "discharge"))
             @test colmetadata(out, "dm", "units") == "Gt"
             for v in ("acc", "melt", "refreeze", "ec", "rain", "runoff", "smb")
-                @test series(v, 99) ≈ sum(out[!, v]) .* (GGA.δice / 1000) rtol = 1e-12
+                @test series(v, 99) ≈ sum(out[!, v]) .* (GlacierHydrology.δice / 1000) rtol = 1e-12
             end
         end
 
@@ -131,8 +131,8 @@ using Dates
             discharge_rgi[rgi=At(r), error=At(true)] = 0.15 * Float64(D(r))
         end
 
-        fits = GGA.rgi_trends(regional, discharge_rgi, (first(ddate), last(ddate)))
-        region_fits = GGA.region_fit_ref_and_err(fits, run; discharge=discharge_rgi)
+        fits = GlacierHydrology.rgi_trends(regional, discharge_rgi, (first(ddate), last(ddate)))
+        region_fits = GlacierHydrology.region_fit_ref_and_err(fits, run; discharge=discharge_rgi)
         trend(v, r) = region_fits[varname=At(v), rgi=At(r), parameter=At("trend"), error=At(false)]
 
         @testset "trends: Gt yr⁻¹, closure, freshwater flux and GSI" begin
@@ -140,7 +140,7 @@ using Dates
                 @test trend(v, r) ≈ Float64(expected_rate[v](r)) rtol = 1e-8
             end
             for r in (1, 5, 98, 99)
-                @test abs(GGA.mass_closure_residual(region_fits; rgi=r)) < 1e-8
+                @test abs(GlacierHydrology.mass_closure_residual(region_fits; rgi=r)) < 1e-8
             end
             # Freshwater to rivers and oceans: runoff plus discharge, both Gt yr⁻¹.
             freshwater = trend("runoff", 99) + discharge_rgi[rgi=At(99), error=At(false)]
@@ -151,7 +151,7 @@ using Dates
         end
 
         @testset "region_fits_table labels masses Gt and volumes km³" begin
-            table = GGA.region_fits_table(region_fits; varnames=["runoff", "acc", "smb", "dm", "fac", "dv"],
+            table = GlacierHydrology.region_fits_table(region_fits; varnames=["runoff", "acc", "smb", "dm", "fac", "dv"],
                                           rgi_regions=[1, 99], digits=4)
             row = findfirst(==(99), table.rgi)
             value(label) = parse(Float64, first(split(table[row, label], " ± ")))
@@ -166,8 +166,8 @@ using Dates
             bad = joinpath(dir, "glacier_dh_best_nmad3_v01_filled_ac_p1_synthesized.jld2")
             out_bad = copy(out)
             colmetadata!(out_bad, "runoff", "units", "m", style=:note)
-            GGA.FileIO.save(replace(bad, ".jld2" => "_gembfit_dv.jld2"), Dict("geotiles" => out_bad))
-            @test_throws "mass column runoff has units \"m\"" GGA.runs2rgi([bad]; physics_member=nothing)
+            GlacierHydrology.FileIO.save(replace(bad, ".jld2" => "_gembfit_dv.jld2"), Dict("geotiles" => out_bad))
+            @test_throws "mass column runoff has units \"m\"" GlacierHydrology.runs2rgi([bad]; physics_member=nothing)
         end
 
         @testset "runs2rgi_physics: GEMB physics members as a dimension beside the runs" begin
@@ -176,14 +176,14 @@ using Dates
             twice = deepcopy(out)
             foreach(x -> x .*= 2, twice.acc)
             for (m, synthesis) in zip(members, (out, twice))
-                file = GGA.gemb_physics_path(replace(run, ".jld2" => "_gembfit_dv.jld2"), m)
+                file = GlacierHydrology.gemb_physics_path(replace(run, ".jld2" => "_gembfit_dv.jld2"), m)
                 mkpath(dirname(file))
-                GGA.FileIO.save(file, Dict("geotiles" => synthesis))
+                GlacierHydrology.FileIO.save(file, Dict("geotiles" => synthesis))
             end
             # By default the reference member is read, which is the first here.
-            @test members[1] == GGA.gemb_reference_physics_member
-            @test GGA.runs2rgi([run])["acc"] == regional["acc"]
-            both = GGA.runs2rgi_physics([run], members; vars2sum=["acc", "melt", "dv"])
+            @test members[1] == GlacierHydrology.gemb_reference_physics_member
+            @test GlacierHydrology.runs2rgi([run])["acc"] == regional["acc"]
+            both = GlacierHydrology.runs2rgi_physics([run], members; vars2sum=["acc", "melt", "dv"])
             @test sort(collect(keys(both))) == ["acc", "dv", "melt"]
             A = both["acc"]
             @test dims(A, :physics) == Dim{:physics}(members)
@@ -193,8 +193,8 @@ using Dates
             @test A[physics=At(members[1])] == regional["acc"]
             @test A[physics=At(members[2])] ≈ 2 .* regional["acc"]
             @test both["melt"][physics=At(members[2])] == regional["melt"]
-            @test_throws "physics members repeat" GGA.runs2rgi_physics([run], [members[1], members[1]])
-            @test_throws "is not a GEMB physics member id" GGA.runs2rgi_physics([run], ["A_kfit_table"])
+            @test_throws "physics members repeat" GlacierHydrology.runs2rgi_physics([run], [members[1], members[1]])
+            @test_throws "is not a GEMB physics member id" GlacierHydrology.runs2rgi_physics([run], ["A_kfit_table"])
         end
     end
 end

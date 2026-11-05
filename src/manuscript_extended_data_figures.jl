@@ -1,7 +1,7 @@
 # =============================================================================
 # This script generates the Extended Data Figures for the manuscript.
 #
-# It runs the discharge and model calibration analyses, using the GlobalGlacierAnalysis (GGA)
+# It runs the discharge and model calibration analyses, using the GlacierHydrology
 # package and the glacier volume products of GlacierVolumeChange.jl.
 #
 # The script is organized by Extended Data Figure number, with each section
@@ -18,7 +18,7 @@
 begin
     using CSV
     using DataFrames
-    import GlobalGlacierAnalysis as GGA
+    import GlacierHydrology
     import GlacierVolumeChange as GVC
     using DimensionalData
     using Dates
@@ -36,15 +36,15 @@ begin
     geotile_width = 2
     force_remake_before = nothing
 
-    single_geotile_test = GGA.geotiles_golden_test[15] # nothing  "lat[+78+80]lon[-080-078]" #
+    single_geotile_test = GlacierHydrology.geotiles_golden_test[15] # nothing  "lat[+78+80]lon[-080-078]" #
 
     #single_geotile_test = #"lat[+60+62]lon[-148-146]"; #"lat[+62+64]lon[-148-146]"; #"lat[+58+60]lon[-136-134]"; #"lat[+58+60]lon[-138-136]"
     #single_geotile_test = "lat[-44-42]lon[+170+172]" # New Zealand
     downscale_to_glacier_method = "area"
     gemb_run_id = 9
-    gemb_physics_member = GGA.gemb_reference_physics_member
+    gemb_physics_member = GlacierHydrology.gemb_reference_physics_member
 
-    ens = GGA.ensemble_paths(; geotile_width, physics_member=gemb_physics_member)
+    ens = GlacierHydrology.ensemble_paths(; geotile_width, physics_member=gemb_physics_member)
     path2runs_synthesized = [ens.synthesized_ref]
     ensemble_reference_file = ens.synthesized_ref
     surface_mask_ref = ens.surface_mask_ref
@@ -54,7 +54,7 @@ begin
         wgms_mb="/mnt/bylot-r3/data/glacier_mb/WGMS/DOI-WGMS-FoG-2025-02b/data/mass_balance.csv",
         wgms_glacier="/mnt/bylot-r3/data/glacier_mb/WGMS/DOI-WGMS-FoG-2025-02b/data/glacier.csv",
 
-        path2glacier=GGA.pathlocal[Symbol("glacier_individual")],
+        path2glacier=GlacierHydrology.pathlocal[Symbol("glacier_individual")],
     )
 
     # Analysis parameters
@@ -71,61 +71,61 @@ begin
 
     discharge_fractional_error = 0.15
 
-    glacier_summary_file = GGA.pathlocal[:glacier_summary]
+    glacier_summary_file = GlacierHydrology.pathlocal[:glacier_summary]
 
     # path2perglacier = replace(ensemble_reference_file, ".jld2" => "_perglacier.jld2")
-    path2discharge = GGA.discharge_global_file(surface_mask_ref)
+    path2discharge = GlacierHydrology.discharge_global_file(surface_mask_ref)
 
    
-    path2rgi_regions = GGA.pathlocal[:rgi6_regions_shp]
+    path2rgi_regions = GlacierHydrology.pathlocal[:rgi6_regions_shp]
 
 end;
 
-gemb = GGA.gemb_ensemble_dv(; gemb_run_id, surface_mask=surface_mask_ref, physics_member=gemb_physics_member);
+gemb = GlacierHydrology.gemb_ensemble_dv(; gemb_run_id, surface_mask=surface_mask_ref, physics_member=gemb_physics_member);
 
 # 12. Calculate global glacier solid ice discharge, filled Antarctic data with modeled SMB
-discharge = GGA.global_discharge_filled(;
+discharge = GlacierHydrology.global_discharge_filled(;
     surface_mask=surface_mask_ref,
-    discharge_global_fn=GGA.discharge_global_file(surface_mask_ref),
+    discharge_global_fn=GlacierHydrology.discharge_global_file(surface_mask_ref),
     gemb,
     discharge2smb_max_latitude=-60,
     discharge2smb_equilibrium_period=(Date(1979), Date(2000)),
     pscale=1,
     ΔT=0,
     geotile_width=2,
-    force_remake_before=GGA.gemb_ensemble_built(GGA.gemb_info(; gemb_run_id, physics_member=gemb_physics_member),
+    force_remake_before=GlacierHydrology.gemb_ensemble_built(GlacierHydrology.gemb_info(; gemb_run_id, physics_member=gemb_physics_member),
                                                 [surface_mask_ref]),
     force_remake_before_hypsometry=nothing
 );
 
-gemb = GGA.dv_adjust4discharge!(gemb, discharge)
+gemb = GlacierHydrology.dv_adjust4discharge!(gemb, discharge)
 
 # [Extended Data Figure 8 & 11d]
-#single_geotile_test = GGA.geotiles_golden_test[1];
+#single_geotile_test = GlacierHydrology.geotiles_golden_test[1];
 
 calibrate_to = [:trend, :five_year, :annual, :all];
 for calibrate_to in calibrate_to
-    (cost, dv_altim, geotiles_in_group) = GGA.gemb_calibration(
+    (cost, dv_altim, geotiles_in_group) = GlacierHydrology.gemb_calibration(
         path2runs_synthesized,
         gemb[:dv];
         geotile_width,
         geotile_grouping_min_feature_area_km2=100,
         single_geotile_test,
-        seasonality_weight=GGA.seasonality_weight,
-        distance_from_origin_penalty=GGA.distance_from_origin_penalty,
-        ΔT_to_pscale_weight=GGA.ΔT_to_pscale_weight,
-        force_remake_before=GGA.gemb_ensemble_built(GGA.gemb_info(; gemb_run_id, physics_member=gemb_physics_member),
+        seasonality_weight=GlacierHydrology.seasonality_weight,
+        distance_from_origin_penalty=GlacierHydrology.distance_from_origin_penalty,
+        ΔT_to_pscale_weight=GlacierHydrology.ΔT_to_pscale_weight,
+        force_remake_before=GlacierHydrology.gemb_ensemble_built(GlacierHydrology.gemb_info(; gemb_run_id, physics_member=gemb_physics_member),
                                                     [surface_mask_ref]),
         calibrate_to
     );
 
     print("when calibrate to $(calibrate_to), the model fit is: ")
 
-    f = GGA.plot_model_fit(gemb, discharge, dv_altim, cost, geotiles_in_group)
+    f = GlacierHydrology.plot_model_fit(gemb, discharge, dv_altim, cost, geotiles_in_group)
     display(f)
 
     fname = "$(replace(splitpath(first(path2runs_synthesized))[end], ".jld2" => ""))_cost_$(calibrate_to).png"
-    fpath = joinpath(GGA.pathlocal[:figures], splitpath(first(path2runs_synthesized))[5], fname)
+    fpath = joinpath(GlacierHydrology.pathlocal[:figures], splitpath(first(path2runs_synthesized))[5], fname)
     save(fpath, f)
 end
 
@@ -133,20 +133,20 @@ end
 # [Extended Data Figure 9 & 10]
 begin
     outfile_prefix = "Gardner2025_geotiles_rates"
-    fname = joinpath(GGA.pathlocal[:data_dir], "project_data", "$(outfile_prefix)_myr.gpkg")
+    fname = joinpath(GlacierHydrology.pathlocal[:data_dir], "project_data", "$(outfile_prefix)_myr.gpkg")
     geotiles0 = GeoDataFrames.read(fname)
 
 
-    f = GGA.plot_ref_pscale_ΔT_summary(path2runs_synthesized, first(path2runs_synthesized); rgi2plot=[99], show_title=false, bin_width=0.5)
-    fname = joinpath(GGA.pathlocal[:figures], "Extended_Data_Figure_9.png")
+    f = GlacierHydrology.plot_ref_pscale_ΔT_summary(path2runs_synthesized, first(path2runs_synthesized); rgi2plot=[99], show_title=false, bin_width=0.5)
+    fname = joinpath(GlacierHydrology.pathlocal[:figures], "Extended_Data_Figure_9.png")
     display(f[1])
     CairoMakie.save(fname, f[1])
 
     # plot a histogram of the rates
-    f = GGA.plot_hist_gemb_altim_trend_amplitude(geotiles0)
+    f = GlacierHydrology.plot_hist_gemb_altim_trend_amplitude(geotiles0)
     display(f)
 
-    outfile = joinpath(GGA.pathlocal[:figures], "Extended_Data_Figure_10.png")
+    outfile = joinpath(GlacierHydrology.pathlocal[:figures], "Extended_Data_Figure_10.png")
     CairoMakie.save(outfile, f)    
 end
 
@@ -155,9 +155,9 @@ begin
     date_range = DateTime(2000, 1, 1).. DateTime(2025, 1, 1)
     scenario = "ssp126"
     var2extract = "glac_runoff_monthly"
-    path2regional = joinpath(GGA.pathlocal[:project_dir], "Gardner2025_regional_timseries.nc")
+    path2regional = joinpath(GlacierHydrology.pathlocal[:project_dir], "Gardner2025_regional_timseries.nc")
     println("Gardner2025_regional_timseries.nc last modified: $(Dates.unix2datetime(mtime(path2regional)))")
-    ds_gardner = GGA.netcdf2dimstack(path2regional)
+    ds_gardner = GlacierHydrology.netcdf2dimstack(path2regional)
     rain_gardner_include = true
     drgi = dims(ds_gardner[:fac],:rgi);
     dstudy = Dim{:study}(["gardner", "rounce"])
@@ -174,7 +174,7 @@ begin
                 continue
             end
 
-            path2rounce = GGA.allfiles(folder; 
+            path2rounce = GlacierHydrology.allfiles(folder; 
                 fn_startswith="R$(lpad(string(rgi_region), 2, '0'))_glac_runoff_monthly_$(scenario)",
                 fn_endswith="2000_2100_all.nc"
             )
@@ -252,12 +252,12 @@ begin
 
     rgis2plot = [19, 18, 17, 16, 98, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1]
 
-    f = GGA._publication_figure(columns=1, rows=1);
-    ax = Axis(f[1, 1]; yticks = (1:length(rgis2plot), GGA.rginum2label.(rgis2plot)), xtickformat = "{:.0f}%", title = "difference in runoff between PyGEMv1.0.2 and this study")
+    f = GlacierHydrology._publication_figure(columns=1, rows=1);
+    ax = Axis(f[1, 1]; yticks = (1:length(rgis2plot), GlacierHydrology.rginum2label.(rgis2plot)), xtickformat = "{:.0f}%", title = "difference in runoff between PyGEMv1.0.2 and this study")
 
     barplot!(ax, delta[rgi = At(rgis2plot)].data; direction=:x)
     display(f)
-    save(joinpath(GGA.pathlocal.figures, "Extended_Data_Figure_18.png"), f)
+    save(joinpath(GlacierHydrology.pathlocal.figures, "Extended_Data_Figure_18.png"), f)
 
     println("PyGEMv1.0.2 produces $(round(Int,delta[rgi = At(99)]))% runoff compared to this study")
     gardner_minus_rounce = (runoff[study=At("gardner"), rgi = At(99)].-runoff[study=At("rounce"), rgi = At(99)]) ./ runoff[study=At("rounce"), rgi = At(99)] * 100
@@ -282,7 +282,7 @@ begin
 
     # Fill in missing glacier areas by joining to glacier polygons based on intersection
     @showprogress desc = "Adding missing areas..." Threads.@threads for r in eachrow(wgms_mb)[index.&ismissing.(wgms_mb.area)]
-        ind = findfirst(GGA.GO.intersects.(glaciers.geometry, Ref(r.geometry)))
+        ind = findfirst(GlacierHydrology.GO.intersects.(glaciers.geometry, Ref(r.geometry)))
         if !isnothing(ind)
             r.area = round(glaciers[ind, :Area] * 1e6)
         end
@@ -292,8 +292,8 @@ begin
     begin
         gdf = groupby(wgms_mb[index, :], :glacier_name)
         df2 = DataFrames.combine(gdf, :geometry => first => :geometry, :geometry => length => :count)
-        GGA.GeoDataFrames.write(joinpath(GGA.pathlocal[:project_dir], "wgms_mb_validation_points.gpkg"),
-            df2; crs=GGA.EPSG(4326))
+        GlacierHydrology.GeoDataFrames.write(joinpath(GlacierHydrology.pathlocal[:project_dir], "wgms_mb_validation_points.gpkg"),
+            df2; crs=GlacierHydrology.EPSG(4326))
     end
 
     # Attach glacier geometry to validation points and write to geopackage
@@ -302,7 +302,7 @@ begin
         df2[!, :geometry] .= repeat([glaciers.geometry[1]], nrow(df2))
 
         @showprogress desc = "Adding glacier geometry to validation points..." Threads.@threads for r in eachrow(df2)
-            ind = findfirst(GGA.GO.intersects.(glaciers.geometry, Ref(r.point_location)))
+            ind = findfirst(GlacierHydrology.GO.intersects.(glaciers.geometry, Ref(r.point_location)))
             if !isnothing(ind)
                 r.geometry = glaciers.geometry[ind]
             end
@@ -310,8 +310,8 @@ begin
 
         # Exclude points with no valid geometry and write result
         no_intersection = df2[:, :geometry] .== Ref(glaciers.geometry[1])
-        GGA.GeoDataFrames.write(joinpath(GGA.pathlocal[:project_dir], "wgms_mb_validation.gpkg"),
-            df2[.!no_intersection, Not(:point_location)]; crs=GGA.EPSG(4326))
+        GlacierHydrology.GeoDataFrames.write(joinpath(GlacierHydrology.pathlocal[:project_dir], "wgms_mb_validation.gpkg"),
+            df2[.!no_intersection, Not(:point_location)]; crs=GlacierHydrology.EPSG(4326))
     end
 
     # --- Peyto Glacier investigation (example, disabled) ---
@@ -326,7 +326,7 @@ begin
     f = Figure();
     ax1 = Axis(f[1, 1]);
     scatterlines!(wgms_mb[index_peyto, :year], cumsum(wgms_mb[index_peyto, :annual_balance]); label="in situ");
-    scatterlines!(GGA.decimalyear.(dims(dm_cumulative, :Ti).val), dm_cumulative.data; label="modeled");
+    scatterlines!(GlacierHydrology.decimalyear.(dims(dm_cumulative, :Ti).val), dm_cumulative.data; label="modeled");
     f
     =#
 
@@ -343,12 +343,12 @@ begin
     # Calculate and plot area coverage
     wgms_annual_coverage = calculate_annual_coverage(df2, ds)
     f_area = plot_area_coverage(df2, wgms_annual_coverage)
-    save(joinpath(GGA.pathlocal.figures, "Extended_Data_Figure_12b.png"), f_area)
+    save(joinpath(GlacierHydrology.pathlocal.figures, "Extended_Data_Figure_12b.png"), f_area)
 
     # Calculate and plot glacier count statistics
     df2_glacier = calculate_glacier_count_statistics(wgms_mb, index_area)
     f_count = plot_glacier_count_timeseries(df2_glacier)
-    save(joinpath(GGA.pathlocal.figures, "Extended_Data_Figure_12a.png"), f_count)
+    save(joinpath(GlacierHydrology.pathlocal.figures, "Extended_Data_Figure_12a.png"), f_count)
 
     # ---- Calculate spatial variogram of annual balance ----
     variogram, ddistance = calculate_spatial_variogram(wgms_mb; mincount=min_neighbors_variogram)
@@ -360,7 +360,7 @@ begin
     # Plot variogram
     f_var = plot_variogram(ddistance, variogram, radius, synth_minus_obs_mad)
     display(f_var)
-    save(joinpath(GGA.pathlocal.figures, "Extended_Data_Figure_14.png"), f_var)
+    save(joinpath(GlacierHydrology.pathlocal.figures, "Extended_Data_Figure_14.png"), f_var)
 
     println("at 100km observations have a mean absolute difference of $(round(variogram[distance = At(100_000)], digits=2)) m w.e. yr⁻¹ and the mean absolute difference between in situ and this study is $(round(synth_minus_obs_mad, digits=2)) m w.e. yr⁻¹")
 
@@ -373,11 +373,11 @@ begin
 
     # --- 2D histogram (heatmap) of observed vs modeled mass balance ---
     f_hist, density = create_2d_histogram(wgms_mb[index, :]; bound_lower=histogram_bounds[1], bound_upper=histogram_bounds[2], colormap=:tempo)
-    save(joinpath(GGA.pathlocal.figures, "Extended_Data_Figure_13.png"), f_hist)
+    save(joinpath(GlacierHydrology.pathlocal.figures, "Extended_Data_Figure_13.png"), f_hist)
 
     # --- Histograms for misfit statistics by season/period ---
     create_misfit_histograms(wgms_mb, index)
-    save(joinpath(GGA.pathlocal.figures, "wgms_mb_misfit_histograms.png"), f_hist)
+    save(joinpath(GlacierHydrology.pathlocal.figures, "wgms_mb_misfit_histograms.png"), f_hist)
 end
 
 
@@ -387,17 +387,17 @@ end
 begin
 
     # load discharge for each RGI [<1s]
-    discharge_rgi = GGA.discharge_rgi(path2discharge, path2rgi_regions; fractional_error=discharge_fractional_error);
+    discharge_rgi = GlacierHydrology.discharge_rgi(path2discharge, path2rgi_regions; fractional_error=discharge_fractional_error);
 
     # load results for all runs for each RGI [18s]
-    runs_rgi = GGA.runs2rgi(path2runs_synthesized);
+    runs_rgi = GlacierHydrology.runs2rgi(path2runs_synthesized);
 
     # fit trends for overlaping periods with RACMO studies
 
     # Arctic Canada North and South: 2000-2015
     dates4trend = [DateTime(2000, 3, 1), DateTime(2015, 12, 15)]
-    runs_rgi_fits = GGA.rgi_trends(runs_rgi, discharge_rgi, dates4trend);
-    region_fits = GGA.region_fit_ref_and_err(runs_rgi_fits, ensemble_reference_file; error_quantile, error_scaling, discharge=discharge_rgi)
+    runs_rgi_fits = GlacierHydrology.rgi_trends(runs_rgi, discharge_rgi, dates4trend);
+    region_fits = GlacierHydrology.region_fit_ref_and_err(runs_rgi_fits, ensemble_reference_file; error_quantile, error_scaling, discharge=discharge_rgi)
 
     r = region_fits[rgi=At(3), varname=At("runoff"), parameter=At("trend"), error=At(false)];
     println("Arctic Canada North Runoff 2000-2015: $(round(r, digits=2))) Gt/yr")
@@ -407,24 +407,24 @@ begin
 
     # Iceland: 2000-2019
     dates4trend = [DateTime(2000, 3, 1), DateTime(2019, 12, 15)]
-    runs_rgi_fits = GGA.rgi_trends(runs_rgi, discharge_rgi, dates4trend);
-    region_fits = GGA.region_fit_ref_and_err(runs_rgi_fits, ensemble_reference_file; error_quantile, error_scaling, discharge=discharge_rgi)
+    runs_rgi_fits = GlacierHydrology.rgi_trends(runs_rgi, discharge_rgi, dates4trend);
+    region_fits = GlacierHydrology.region_fit_ref_and_err(runs_rgi_fits, ensemble_reference_file; error_quantile, error_scaling, discharge=discharge_rgi)
 
     r = region_fits[rgi=At(6), varname=At("runoff"), parameter=At("trend"), error=At(false)];
     println("Iceland Runoff 2000-2015: $(round(r, digits=2))) Gt/yr")
 
     # Svalbard: 2000-2018
     dates4trend = [DateTime(2000, 3, 1), DateTime(2018, 12, 15)]
-    runs_rgi_fits = GGA.rgi_trends(runs_rgi, discharge_rgi, dates4trend);
-    region_fits = GGA.region_fit_ref_and_err(runs_rgi_fits, ensemble_reference_file; error_quantile, error_scaling, discharge=discharge_rgi)
+    runs_rgi_fits = GlacierHydrology.rgi_trends(runs_rgi, discharge_rgi, dates4trend);
+    region_fits = GlacierHydrology.region_fit_ref_and_err(runs_rgi_fits, ensemble_reference_file; error_quantile, error_scaling, discharge=discharge_rgi)
 
     r = region_fits[rgi=At(7), varname=At("runoff"), parameter=At("trend"), error=At(false)];
     println("Svalbard Runoff 2000-2018: $(round(r, digits=2))) Gt/yr")
 
     # Southern Andes: 2000-2023
     dates4trend = [DateTime(2000, 3, 1), DateTime(2023, 12, 15)]
-    runs_rgi_fits = GGA.rgi_trends(runs_rgi, discharge_rgi, dates4trend);
-    region_fits = GGA.region_fit_ref_and_err(runs_rgi_fits, ensemble_reference_file; error_quantile, error_scaling, discharge=discharge_rgi)
+    runs_rgi_fits = GlacierHydrology.rgi_trends(runs_rgi, discharge_rgi, dates4trend);
+    region_fits = GlacierHydrology.region_fit_ref_and_err(runs_rgi_fits, ensemble_reference_file; error_quantile, error_scaling, discharge=discharge_rgi)
 
     r = region_fits[rgi=At(17), varname=At("runoff"), parameter=At("trend"), error=At(false)];
     println("Southern Andes Runoff 2000-2023: $(round(r, digits=2))) Gt/yr")

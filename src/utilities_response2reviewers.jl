@@ -1,7 +1,7 @@
 # Import required packages
 using CSV
 using DataFrames
-import GlobalGlacierAnalysis as GGA
+import GlacierHydrology
 using DimensionalData
 using Dates
 using CairoMakie
@@ -34,17 +34,17 @@ function load_wgms_data(paths)
     wgms_glacier = CSV.read(paths.wgms_glacier, DataFrame)
 
     # Augment WGMS data table with latitude, longitude, and geometry (point)
-    ia, ib = GGA.intersectindices(collect(wgms_mb.glacier_id), collect(wgms_glacier.id))
+    ia, ib = GlacierHydrology.intersectindices(collect(wgms_mb.glacier_id), collect(wgms_glacier.id))
     wgms_mb[!, :latitude] = wgms_glacier[ib, :latitude]
     wgms_mb[!, :longitude] = wgms_glacier[ib, :longitude]
-    wgms_mb[!, :geometry] = GGA.GI.Point.(wgms_mb.longitude, wgms_mb.latitude)
+    wgms_mb[!, :geometry] = GlacierHydrology.GI.Point.(wgms_mb.longitude, wgms_mb.latitude)
 
     # Load model data (netcdf) and individual glacier polygons
-    path2outfile = joinpath(GGA.pathlocal[:project_dir], "Gardner2025_glacier_2deg.nc")
+    path2outfile = joinpath(GlacierHydrology.pathlocal[:project_dir], "Gardner2025_glacier_2deg.nc")
 
     println("glacier model data last modified: $(Dates.unix2datetime(mtime(path2outfile))): $path2outfile")
-    ds = GGA.netcdf2dimstack(path2outfile)
-    glaciers = GGA.GeoDataFrames.read(paths.path2glacier)
+    ds = GlacierHydrology.netcdf2dimstack(path2outfile)
+    glaciers = GlacierHydrology.GeoDataFrames.read(paths.path2glacier)
     
     return wgms_mb, wgms_glacier, ds, glaciers
 end
@@ -76,7 +76,7 @@ function preallocate_model_columns!(wgms_mb)
     wgms_mb[!, :runoff_summer] = Vector{Union{Missing,Float64}}(missing, nrow(wgms_mb))
     wgms_mb[!, :dm_summer] = Vector{Union{Missing,Float64}}(missing, nrow(wgms_mb))
     wgms_mb[!, :smb_summer] = Vector{Union{Missing,Float64}}(missing, nrow(wgms_mb))
-    wgms_mb[!, :geotile_centroid] = Vector{Union{Missing,GGA.GI.Point}}(missing, nrow(wgms_mb))
+    wgms_mb[!, :geotile_centroid] = Vector{Union{Missing,GlacierHydrology.GI.Point}}(missing, nrow(wgms_mb))
     wgms_mb[!, :geotile_glacier_area] = Vector{Union{Missing,Float64}}(missing, nrow(wgms_mb))
     wgms_mb[!, :geotile_area] = Vector{Union{Missing,Float64}}(missing, nrow(wgms_mb))
 end
@@ -100,15 +100,15 @@ julia> # Use for area-weighted aggregation
 """
 function setup_geotile_grid(ds)
     geotile_width_out = abs(dims(ds, :X)[1] - dims(ds, :X)[2])
-    lond = X(GGA.DimensionalData.Dimensions.Lookups.Sampled(
+    lond = X(GlacierHydrology.DimensionalData.Dimensions.Lookups.Sampled(
         -180+geotile_width_out/2:geotile_width_out:180-geotile_width_out/2,
-        sampling=GGA.DimensionalData.Dimensions.Lookups.Intervals(GGA.DimensionalData.Dimensions.Lookups.Center());
+        sampling=GlacierHydrology.DimensionalData.Dimensions.Lookups.Intervals(GlacierHydrology.DimensionalData.Dimensions.Lookups.Center());
         metadata=Dict("long_name" => "longitude", "units" => "degrees")))
-    latd = Y(GGA.DimensionalData.Dimensions.Lookups.Sampled(
+    latd = Y(GlacierHydrology.DimensionalData.Dimensions.Lookups.Sampled(
         -90+geotile_width_out/2:geotile_width_out:90-geotile_width_out/2,
-        sampling=GGA.DimensionalData.Dimensions.Lookups.Intervals(GGA.DimensionalData.Dimensions.Lookups.Center());
+        sampling=GlacierHydrology.DimensionalData.Dimensions.Lookups.Intervals(GlacierHydrology.DimensionalData.Dimensions.Lookups.Center());
         metadata=Dict("long_name" => "latitude", "units" => "degrees")))
-    cell_area = GGA.Rasters.cellarea(GGA.Rasters.Raster(zeros(lond, latd); crs=GGA.GeoFormatTypes.EPSG(4326)))
+    cell_area = GlacierHydrology.Rasters.cellarea(GlacierHydrology.Rasters.Raster(zeros(lond, latd); crs=GlacierHydrology.GeoFormatTypes.EPSG(4326)))
     return cell_area
 end
 
@@ -159,7 +159,7 @@ function process_observation_row!(r, ds, cell_area)
         # Store synthetic outputs if non-empty
         if length(runoff_cumulative) > 0
             r.runoff, r.dm, r.smb = calculate_metrics(runoff_cumulative, dm_cumulative, smb_cumulative, r.geotile_glacier_area)
-            r.geotile_centroid = GGA.GI.Point(refdims(runoff_cumulative)[1][1], refdims(runoff_cumulative)[2][1])
+            r.geotile_centroid = GlacierHydrology.GI.Point(refdims(runoff_cumulative)[1][1], refdims(runoff_cumulative)[2][1])
 
             # If a midseason date exists, also compute winter/summer metrics
             if !ismissing(r.midseason_date)
@@ -257,14 +257,14 @@ end
 Create and save a plot of area coverage over time.
 """
 function plot_area_coverage(df2, wgms_annual_coverage)
-    f = GGA._publication_figure(columns=1, rows=1)
+    f = GlacierHydrology._publication_figure(columns=1, rows=1)
     ax1 = CairoMakie.Axis(f[1, 1]; ylabel="global glacier area observed [%]")
     lines!(df2.year, wgms_annual_coverage)
     fill_between!(ax1, df2.year, wgms_annual_coverage, 0)
     xlims!(ax1, minimum(df2.year), maximum(df2.year))
     ylims!(ax1, (0, nothing))
     
-    fname = joinpath(GGA.pathlocal.figures, "wgms_mb_annual_coverage.png")
+    fname = joinpath(GlacierHydrology.pathlocal.figures, "wgms_mb_annual_coverage.png")
     CairoMakie.save(fname, f)
     return f
 end
@@ -292,7 +292,7 @@ function plot_glacier_count_timeseries(df2; rgi_count=274531)
     #rgi6_count = CONFIG.rgi6_count
     #rgi7_count = CONFIG.rgi7_count
 
-    f = GGA._publication_figure(columns=1, rows=1)
+    f = GlacierHydrology._publication_figure(columns=1, rows=1)
     ax1 = CairoMakie.Axis(f[1, 1]; ylabel="glacier count")
     ax2 = CairoMakie.Axis(f[1, 1], yaxisposition=:right, ylabel="% of global glacier count")
 
@@ -308,7 +308,7 @@ function plot_glacier_count_timeseries(df2; rgi_count=274531)
     xlims!(ax2, minimum(df2.year), maximum(df2.year))
     ylims!(ax2, (0, ymax / rgi_count * 100))
     
-    fname = joinpath(GGA.pathlocal.figures, "wgms_mb_glacier_count.png")
+    fname = joinpath(GlacierHydrology.pathlocal.figures, "wgms_mb_glacier_count.png")
     CairoMakie.save(fname, f)
     return f
 end
@@ -320,7 +320,7 @@ Calculate spatial variogram of annual balance as a function of distance.
 Returns variogram data and distance bins.
 """
 function calculate_spatial_variogram(wgms_mb; mincount=3)
-    wgms_mb[!, :geometry] = GGA.GI.Point.(wgms_mb.longitude, wgms_mb.latitude) # Ensure all rows have point geometry
+    wgms_mb[!, :geometry] = GlacierHydrology.GI.Point.(wgms_mb.longitude, wgms_mb.latitude) # Ensure all rows have point geometry
 
     # Define distance bins (in meters) for variogram calculation
     delta_distance = vcat(0, 10_000 .* cumsum(collect(1:2:16)) .+ 10_000)
@@ -347,12 +347,12 @@ function calculate_spatial_variogram(wgms_mb; mincount=3)
 
             for r in eachrow(df2)
                 # Donut-shaped spatial window: within buffer_radius and outside buffer_inner
-                cap1 = GGA.UnitSphericalCap(r.geometry, buffer_radius)
-                cap2 = GGA.UnitSphericalCap(r.geometry, buffer_inner)
-                polygon1 = GGA.to_latlong_polygon(cap1, 30)
-                polygon2 = GGA.to_latlong_polygon(cap2, 30)
+                cap1 = GlacierHydrology.UnitSphericalCap(r.geometry, buffer_radius)
+                cap2 = GlacierHydrology.UnitSphericalCap(r.geometry, buffer_inner)
+                polygon1 = GlacierHydrology.to_latlong_polygon(cap1, 30)
+                polygon2 = GlacierHydrology.to_latlong_polygon(cap2, 30)
 
-                index_within_radius = GGA.GO.intersects.(Ref(polygon1), df2.geometry) .& .!GGA.GO.intersects.(Ref(polygon2), df2.geometry)
+                index_within_radius = GlacierHydrology.GO.intersects.(Ref(polygon1), df2.geometry) .& .!GlacierHydrology.GO.intersects.(Ref(polygon2), df2.geometry)
                 if sum(index_within_radius) > mincount
                     absdiff = abs.(df2.annual_balance[index_within_radius] .- r.annual_balance)
                     mean_absdiff = mean(absdiff[absdiff .!= 0])
@@ -416,12 +416,12 @@ end
 Create and save a plot of the spatial variogram.
 """
 function plot_variogram(ddistance, variogram, radius, synth_minus_obs_mad; plot_point=true)
-    f = GGA._publication_figure(columns=1, rows=1)
+    f = GlacierHydrology._publication_figure(columns=1, rows=1)
     ax1 = CairoMakie.Axis(f[1, 1]; ylabel="mean absolute difference [m w.e. yr⁻¹]", xlabel="distance to other observations [km]")
     scatterlines!(ax1, ddistance.val ./ 1000, variogram.data)
     plot_point ? plot!(ax1, Point(Float64(radius), synth_minus_obs_mad), color=:red) : nothing
     
-    fname = joinpath(GGA.pathlocal.figures, "wgms_mb_variogram.png")
+    fname = joinpath(GlacierHydrology.pathlocal.figures, "wgms_mb_variogram.png")
     CairoMakie.save(fname, f)
     return f
 end
@@ -434,12 +434,12 @@ Returns the figure and density data.
 """
 function create_2d_histogram(wgms_mb; bound_lower = -5, bound_upper=3, colormap=Reverse(:viridis))
     bins = bound_lower:0.25:bound_upper
-    df = GGA.binstats(wgms_mb, [:annual_balance, :dm], [bins, bins], :both_valid; missing_bins=true, col_function=sum)
+    df = GlacierHydrology.binstats(wgms_mb, [:annual_balance, :dm], [bins, bins], :both_valid; missing_bins=true, col_function=sum)
     x = unique(df[:, 1])
     y = unique(df[:, 2])
     density = reshape(df.both_valid_sum, length(x), length(y))
 
-    f = GGA._publication_figure(columns=1, rows=1)
+    f = GlacierHydrology._publication_figure(columns=1, rows=1)
     ax1 = CairoMakie.Axis(f[1, 1]; ylabel="in situ [m w.e. yr⁻¹]", xlabel="this study [m w.e. yr⁻¹]")
     hm = heatmap!(x, y, density; colormap)
     Colorbar(f[1, 2], hm)

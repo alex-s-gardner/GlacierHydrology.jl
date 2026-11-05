@@ -9,14 +9,14 @@
 #
 # Output: one DimStack per surface mask over (geotile, date, pscale, ΔT) in km³ of ice equivalent,
 # area-weighted by that mask's hypsometry, saved as "gemb_dv" with its "surface_mask" and the
-# "tile_provenance" of the tile files read (`GGA.gemb_tile_provenance`) to
+# "tile_provenance" of the tile files read (`GlacierHydrology.gemb_tile_provenance`) to
 # `gemb_geotile_dv_file(gembinfo, surface_mask)` and read back by
 # `gemb_ensemble_dv(; gemb_run_id, surface_mask)`. Altimetry members are calibrated against the ensemble
 # of their own mask.
 # GEMB output is in metres of ice equivalent at the density each tile records as `model_density_ice`.
 
 begin
-    import GlobalGlacierAnalysis as GGA
+    import GlacierHydrology
     import GlacierVolumeChange as GVC
     using DataFrames
     using Dates
@@ -35,9 +35,9 @@ begin
     # The GEMB run and physics member whose tile sweep is binned; `run_all.jl` sets both before
     # including this file. Run 10 is the pilot, binned on the geotiles with a tile of their own.
     @isdefined(gemb_run_id) || (gemb_run_id = 9)
-    @isdefined(gemb_physics_member) || (gemb_physics_member = GGA.gemb_reference_physics_member)
+    @isdefined(gemb_physics_member) || (gemb_physics_member = GlacierHydrology.gemb_reference_physics_member)
 
-    gembinfo = GGA.gemb_info(; gemb_run_id, physics_member=gemb_physics_member)
+    gembinfo = GlacierHydrology.gemb_info(; gemb_run_id, physics_member=gemb_physics_member)
 
     # Date bins: the calendar months of `GVC.project_date_bins`, labelled on the 15th, extended back to
     # 1970. Every altimetry bin then has a GEMB bin with the same label, which `gemb_calibration` requires.
@@ -53,31 +53,31 @@ begin
     # which reports each substitution. Only tiles spanning the whole date axis are eligible, as donor or
     # otherwise: a partial one would arrive partly NaN and fail the checks below with no indication of
     # why, and the directory also accumulates shorter development sweeps.
-    coverage = GGA.gemb_tile_coverage(gembinfo.tile_dir)
-    available = keys(GGA.gemb_tile_paths(gembinfo.tile_dir;
+    coverage = GlacierHydrology.gemb_tile_coverage(gembinfo.tile_dir)
+    available = keys(GlacierHydrology.gemb_tile_paths(gembinfo.tile_dir;
                                         covering=(first(date_center), last(date_center))))
     println("tile files: $(length(coverage)), of which $(length(available)) span the date axis")
     println("dates: $(length(date_center)) bins, $(first(date_center)) .. $(last(date_center))")
 end;
 
 for surface_mask in gemb_surface_masks
-    geotiles = GGA._geotile_load_align(; surface_mask, geotile_order=nothing,
+    geotiles = GlacierHydrology._geotile_load_align(; surface_mask, geotile_order=nothing,
                                       only_geotiles_w_area_gt_0=true)
-    area_km2 = GGA._geotile_area_km2(; surface_mask, geotile_width)
+    area_km2 = GlacierHydrology._geotile_area_km2(; surface_mask, geotile_width)
 
     println("$(surface_mask): geotiles with a tile of their own: $(sum(in(id, available) for id in geotiles.id)) of $(nrow(geotiles))")
 
     if gemb_run_id == 10
-        own = GGA.gemb_tile_own_geotiles(geotiles.id, gembinfo.tile_dir;
+        own = GlacierHydrology.gemb_tile_own_geotiles(geotiles.id, gembinfo.tile_dir;
                                          covering=(first(date_center), last(date_center)))
         geotiles = geotiles[in.(geotiles.id, Ref(Set(own))), :]
         println("$(surface_mask): pilot run, binned on the $(nrow(geotiles)) geotiles with a pilot tile of their own")
 
         # A precipitation-gradient member covers only the geotiles whose bands stay on their tile's
         # pscale axis at every node of its forcing grid; the rest are listed, not binned.
-        g = GGA.gemb_physics_member_parts(gemb_physics_member).precipitation_gradient
+        g = GlacierHydrology.gemb_physics_member_parts(gemb_physics_member).precipitation_gradient
         if g > 0
-            split = GGA.gemb_gradient_supported_geotiles(geotiles.id, area_km2, gembinfo.tile_dir, g,
+            split = GlacierHydrology.gemb_gradient_supported_geotiles(geotiles.id, area_km2, gembinfo.tile_dir, g,
                                                          gembinfo.forcing_grid.pscale;
                                                          covering=(first(date_center), last(date_center)))
             geotiles = geotiles[in.(geotiles.id, Ref(Set(split.supported))), :]
@@ -87,7 +87,7 @@ for surface_mask in gemb_surface_masks
     end
 
     if !isnothing(rgi_subset)
-        GGA.add_single_rgi_column!(geotiles)
+        GlacierHydrology.add_single_rgi_column!(geotiles)
         geotiles = geotiles[geotiles.rgi.==rgi_subset, :]
     end
 
@@ -101,12 +101,12 @@ for surface_mask in gemb_surface_masks
 
     println("$(surface_mask): geotiles to process: $(nrow(geotiles))  ($(round(Int, sum(area_km2))) km² of ice)")
 
-    gemb_dv0 = GGA.process_gemb_tiles(geotiles, area_km2; gembinfo.tile_dir, date_center,
+    gemb_dv0 = GlacierHydrology.process_gemb_tiles(geotiles, area_km2; gembinfo.tile_dir, date_center,
                                       physics_member=gemb_physics_member,
                                       forcing_grid=get(gembinfo, :forcing_grid, nothing))
     tile_provenance = DimensionalData.metadata(gemb_dv0)["tile_provenance"]
 
-    gemb_dv0 = GGA.gemb_add_derived_vars!(gemb_dv0)
+    gemb_dv0 = GlacierHydrology.gemb_add_derived_vars!(gemb_dv0)
 
     # Physical gates on the ensemble: no NaN at 2000, cumulative fluxes never decrease, refreeze never
     # exceeds melt.
@@ -129,7 +129,7 @@ for surface_mask in gemb_surface_masks
     println("$(surface_mask): all checks passed")
 
     if isnothing(single_geotile_test)
-        gemb_geotile_filename_dv = GGA.gemb_geotile_dv_file(gembinfo, surface_mask)
+        gemb_geotile_filename_dv = GlacierHydrology.gemb_geotile_dv_file(gembinfo, surface_mask)
         save(gemb_geotile_filename_dv, Dict("gemb_dv" => gemb_dv0, "surface_mask" => String(surface_mask),
                                             "tile_provenance" => tile_provenance))
         println("wrote $(gemb_geotile_filename_dv)")

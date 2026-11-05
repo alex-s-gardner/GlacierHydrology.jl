@@ -6,8 +6,8 @@ glacier discharge, GRACE satellite gravity, and GlaMBIE mass balance data.
 """
 
 using Test
-using GlobalGlacierAnalysis
-import GlobalGlacierAnalysis as GGA
+using GlacierHydrology
+import GlacierHydrology
 using CSV
 using DataFrames
 using Statistics

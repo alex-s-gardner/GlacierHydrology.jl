@@ -6,8 +6,8 @@ hydrologic routing, and population exposure calculations.
 """
 
 using Test
-using GlobalGlacierAnalysis
-import GlobalGlacierAnalysis as GGA
+using GlacierHydrology
+import GlacierHydrology
 using DataFrames
 using Statistics
 using DimensionalData
@@ -23,15 +23,15 @@ include("../fixtures/synthetic_network.jl")
         next_ids = [2, 3, 0]
 
         # Trace from node 1
-        path = GGA.trace_downstream(1, ids, next_ids)
+        path = GlacierHydrology.trace_downstream(1, ids, next_ids)
         @test path == [1, 2, 3]
 
         # Trace from node 2
-        path2 = GGA.trace_downstream(2, ids, next_ids)
+        path2 = GlacierHydrology.trace_downstream(2, ids, next_ids)
         @test path2 == [2, 3]
 
         # Trace from ocean terminus
-        path3 = GGA.trace_downstream(3, ids, next_ids)
+        path3 = GlacierHydrology.trace_downstream(3, ids, next_ids)
         @test path3 == [3]
     end
 
@@ -41,15 +41,15 @@ include("../fixtures/synthetic_network.jl")
         next_ids = [3, 3, 4, 0]
 
         # Trace from branch 1
-        path1 = GGA.trace_downstream(1, ids, next_ids)
+        path1 = GlacierHydrology.trace_downstream(1, ids, next_ids)
         @test path1 == [1, 3, 4]
 
         # Trace from branch 2
-        path2 = GGA.trace_downstream(2, ids, next_ids)
+        path2 = GlacierHydrology.trace_downstream(2, ids, next_ids)
         @test path2 == [2, 3, 4]
 
         # Trace from confluence
-        path3 = GGA.trace_downstream(3, ids, next_ids)
+        path3 = GlacierHydrology.trace_downstream(3, ids, next_ids)
         @test path3 == [3, 4]
 
         # All branches eventually reach node 4
@@ -60,19 +60,19 @@ include("../fixtures/synthetic_network.jl")
 
     @testset "haversine_distance" begin
         # Same point
-        d_same = GGA.haversine_distance((0.0, 0.0), (0.0, 0.0))
+        d_same = GlacierHydrology.haversine_distance((0.0, 0.0), (0.0, 0.0))
         @test d_same ≈ 0.0 atol=1.0
 
         # Equator separation (1 degree ≈ 111.32 km)
-        d_eq = GGA.haversine_distance((0.0, 0.0), (1.0, 0.0))
+        d_eq = GlacierHydrology.haversine_distance((0.0, 0.0), (1.0, 0.0))
         @test d_eq ≈ 111320.0 rtol=1e-2
 
         # Antipodal points (half Earth circumference ≈ 20,000 km)
-        d_antipodal = GGA.haversine_distance((0.0, 0.0), (180.0, 0.0))
+        d_antipodal = GlacierHydrology.haversine_distance((0.0, 0.0), (180.0, 0.0))
         @test d_antipodal ≈ 20037000.0 rtol=1e-2
 
         # Pole to pole
-        d_pole = GGA.haversine_distance((0.0, 90.0), (0.0, -90.0))
+        d_pole = GlacierHydrology.haversine_distance((0.0, 90.0), (0.0, -90.0))
         @test d_pole ≈ 20004000.0 rtol=1e-2
     end
 
@@ -88,7 +88,7 @@ include("../fixtures/synthetic_network.jl")
         flux = DimArray(reshape(collect(float.(local_flux)), 1, length(ids)),
                         (Dim{:Ti}(1:1), Dim{:id}(ids)))
         headbasin = [!(id in next_ids) for id in ids]
-        GGA.flux_accumulate!(flux, ids, next_ids, headbasin, fill(1, length(ids)))
+        GlacierHydrology.flux_accumulate!(flux, ids, next_ids, headbasin, fill(1, length(ids)))
         return flux
     end
 
@@ -137,7 +137,7 @@ include("../fixtures/synthetic_network.jl")
         # fractions. It is not a convolution routine: applying a response to a time series is
         # `apply_vector_impulse_resonse!`. Fractions are rounded to two digits and truncated at
         # the first zero, so they sum to 1 only to within that rounding.
-        response = GGA.linear_reservoir_impulse_response_monthly(45)
+        response = GlacierHydrology.linear_reservoir_impulse_response_monthly(45)
 
         @test response isa AbstractVector
         @test !isempty(response)
@@ -157,8 +157,8 @@ include("../fixtures/synthetic_network.jl")
     end
 
     @testset "linear_reservoir_impulse_response_monthly - residence time scaling" begin
-        fast = GGA.linear_reservoir_impulse_response_monthly(15)
-        slow = GGA.linear_reservoir_impulse_response_monthly(45)
+        fast = GlacierHydrology.linear_reservoir_impulse_response_monthly(15)
+        slow = GlacierHydrology.linear_reservoir_impulse_response_monthly(45)
 
         # A longer residence time spreads the response over more months...
         @test length(slow) > length(fast)
@@ -193,7 +193,7 @@ include("../fixtures/synthetic_network.jl")
         # Valid network
         valid_ids = [1, 2, 3]
         valid_next = [2, 3, 0]
-        @test_nowarn GGA.trace_downstream(1, valid_ids, valid_next)
+        @test_nowarn GlacierHydrology.trace_downstream(1, valid_ids, valid_next)
 
         # Circular network: 1 → 2 → 1 (invalid). `trace_downstream` guards against this with an
         # iteration cap rather than by raising: the kwarg is `maxiters` (not `max_steps`), and a
@@ -201,10 +201,10 @@ include("../fixtures/synthetic_network.jl")
         circular_ids = [1, 2]
         circular_next = [2, 1]
 
-        cycle_path = GGA.trace_downstream(1, circular_ids, circular_next)
+        cycle_path = GlacierHydrology.trace_downstream(1, circular_ids, circular_next)
         @test length(cycle_path) <= length(circular_ids) + 1   # bounded, does not hang
 
-        bounded = GGA.trace_downstream(1, circular_ids, circular_next; maxiters=10)
+        bounded = GlacierHydrology.trace_downstream(1, circular_ids, circular_next; maxiters=10)
         @test length(bounded) <= 11
         @test all(in(circular_ids), bounded)
     end
@@ -217,12 +217,12 @@ include("../fixtures/synthetic_network.jl")
         next_ids = [2, 0, 4, 0]
 
         # Trace from first system
-        path1 = GGA.trace_downstream(1, ids, next_ids)
+        path1 = GlacierHydrology.trace_downstream(1, ids, next_ids)
         @test path1 == [1, 2]
         @test 3 ∉ path1  # Should not include other drainage
 
         # Trace from second system
-        path2 = GGA.trace_downstream(3, ids, next_ids)
+        path2 = GlacierHydrology.trace_downstream(3, ids, next_ids)
         @test path2 == [3, 4]
         @test 1 ∉ path2  # Should not include other drainage
     end
@@ -243,7 +243,7 @@ include("../fixtures/synthetic_network.jl")
             lon1, lat1 = network.lon[i], network.lat[i]
             lon2, lat2 = network.lon[i+1], network.lat[i+1]
 
-            haversine_km = GGA.haversine_distance((lon1, lat1), (lon2, lat2)) / 1000
+            haversine_km = GlacierHydrology.haversine_distance((lon1, lat1), (lon2, lat2)) / 1000
             network_km = network.lengthkm[i]
 
             # Should be similar (within 20% for straight line vs river meander)
@@ -263,8 +263,8 @@ include("../fixtures/synthetic_network.jl")
         input_flux = 10.0 .+ 5.0 .* sin.(2π .* t)  # Mean 10, amplitude 5
 
         M = reshape(copy(input_flux), 1, 1, n_months)
-        response = GGA.linear_reservoir_impulse_response_monthly(60)
-        GGA.apply_vector_impulse_resonse!(M, response)
+        response = GlacierHydrology.linear_reservoir_impulse_response_monthly(60)
+        GlacierHydrology.apply_vector_impulse_resonse!(M, response)
         output_flux = vec(M[1, 1, :])
 
         # Test: Output should be smoother than input (reservoir dampens)
@@ -316,14 +316,14 @@ include("../fixtures/synthetic_network.jl")
 
     @testset "glacier river products are named by glacier inventory" begin
         # The RGI6 names are the ones the existing products were written under.
-        @test GGA.glacier_rivers_file("glacier") ==
-              joinpath(GGA.pathlocal[:river], "riv_pfaf_MERIT_Hydro_v07_Basins_v01_glacier.arrow")
-        @test GGA.glacier_routing_file("glacier") ==
-              replace(GGA.pathlocal[:glacier_individual], ".gpkg" => "_routing.arrow")
-        @test GGA.glacier_rivers_file("glacier_rgi7") ==
-              joinpath(GGA.pathlocal[:river], "riv_pfaf_MERIT_Hydro_v07_Basins_v01_glacier_rgi7.arrow")
-        @test GGA.glacier_routing_file("glacier_rgi7") ==
-              replace(GGA.pathlocal[:glacier_rgi7_individual], ".gpkg" => "_routing.arrow")
-        @test GGA.glacier_routing_file("glacier_rgi7") != GGA.glacier_routing_file("glacier")
+        @test GlacierHydrology.glacier_rivers_file("glacier") ==
+              joinpath(GlacierHydrology.pathlocal[:river], "riv_pfaf_MERIT_Hydro_v07_Basins_v01_glacier.arrow")
+        @test GlacierHydrology.glacier_routing_file("glacier") ==
+              replace(GlacierHydrology.pathlocal[:glacier_individual], ".gpkg" => "_routing.arrow")
+        @test GlacierHydrology.glacier_rivers_file("glacier_rgi7") ==
+              joinpath(GlacierHydrology.pathlocal[:river], "riv_pfaf_MERIT_Hydro_v07_Basins_v01_glacier_rgi7.arrow")
+        @test GlacierHydrology.glacier_routing_file("glacier_rgi7") ==
+              replace(GlacierHydrology.pathlocal[:glacier_rgi7_individual], ".gpkg" => "_routing.arrow")
+        @test GlacierHydrology.glacier_routing_file("glacier_rgi7") != GlacierHydrology.glacier_routing_file("glacier")
     end
 end

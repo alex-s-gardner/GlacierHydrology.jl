@@ -1,6 +1,6 @@
 using Test
-using GlobalGlacierAnalysis
-import GlobalGlacierAnalysis as GGA
+using GlacierHydrology
+import GlacierHydrology
 using JLD2
 using DimensionalData
 import DimensionalData as DD

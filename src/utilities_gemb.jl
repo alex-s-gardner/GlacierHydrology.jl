@@ -6,7 +6,7 @@
     gemb_bestfit_grouped(dv_altim, dv_gemb, geotiles0;
                          distance_from_origin_penalty=0.20,
                          ΔT_to_pscale_weight=1,
-                         seasonality_weight=GlobalGlacierAnalysis.seasonality_weight,
+                         seasonality_weight=GlacierHydrology.seasonality_weight,
                          calibrate_to=:all,
                          is_scaling_factor=Dict("pscale"=>true, "ΔT"=>false))
 
@@ -67,7 +67,7 @@ See also: [`gemb_altim_cost`](@ref), [`gemb_dv_sample`](@ref)
 function gemb_bestfit_grouped(dv_altim, dv_gemb, geotiles0;
     distance_from_origin_penalty = 20/100,
     ΔT_to_pscale_weight = 1,
-    seasonality_weight = GlobalGlacierAnalysis.seasonality_weight,
+    seasonality_weight = GlacierHydrology.seasonality_weight,
     calibrate_to=:all,
     is_scaling_factor=Dict("pscale" => true, "ΔT" => false),
     origin_penalty_mode=:prior,
@@ -336,7 +336,7 @@ function gemb_calibration(
     geotile_width=2,
     geotile_grouping_min_feature_area_km2=100,
     single_geotile_test=nothing,
-    seasonality_weight=GlobalGlacierAnalysis.seasonality_weight,
+    seasonality_weight=GlacierHydrology.seasonality_weight,
     distance_from_origin_penalty=2 / 100,
     ΔT_to_pscale_weight=1,
     force_remake_before=nothing,

@@ -1,5 +1,5 @@
 """
-Test helper functions and utilities for GlobalGlacierAnalysis.jl tests
+Test helper functions and utilities for GlacierHydrology.jl tests
 """
 
 using Dates
@@ -30,7 +30,7 @@ function synthetic_elevation_timeseries(;
     phase=0.0,
     noise_sigma=0.1
 )
-    t = GGA.decimalyear.(dates) .- minimum(GGA.decimalyear.(dates))
+    t = GlacierHydrology.decimalyear.(dates) .- minimum(GlacierHydrology.decimalyear.(dates))
     signal = trend .* t .+ amplitude .* sin.(2π .* (t .+ phase))
     noise = noise_sigma .* randn(length(t))
     return signal .+ noise

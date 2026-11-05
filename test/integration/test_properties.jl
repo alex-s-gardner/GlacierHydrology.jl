@@ -1,13 +1,13 @@
 """
-Property-based tests for statistical invariants in GlobalGlacierAnalysis.jl
+Property-based tests for statistical invariants in GlacierHydrology.jl
 
 These tests verify properties that should hold regardless of specific input values,
 using randomized inputs to discover edge cases and ensure algorithmic correctness.
 """
 
 using Test
-using GlobalGlacierAnalysis
-import GlobalGlacierAnalysis as GGA
+using GlacierHydrology
+import GlacierHydrology
 using Random
 using Statistics
 using Dates
@@ -120,17 +120,17 @@ import DimensionalData as DD
             lon_c, lat_c = rand() * 360 - 180, rand() * 180 - 90
 
             # Property 1: d(A,A) = 0
-            d_aa = GGA.haversine_distance((lon_a, lat_a), (lon_a, lat_a))
+            d_aa = GlacierHydrology.haversine_distance((lon_a, lat_a), (lon_a, lat_a))
             @test d_aa ≈ 0.0 atol=1.0
 
             # Property 2: Symmetry
-            d_ab = GGA.haversine_distance((lon_a, lat_a), (lon_b, lat_b))
-            d_ba = GGA.haversine_distance((lon_b, lat_b), (lon_a, lat_a))
+            d_ab = GlacierHydrology.haversine_distance((lon_a, lat_a), (lon_b, lat_b))
+            d_ba = GlacierHydrology.haversine_distance((lon_b, lat_b), (lon_a, lat_a))
             @test d_ab ≈ d_ba rtol=1e-10
 
             # Property 3: Triangle inequality
-            d_bc = GGA.haversine_distance((lon_b, lat_b), (lon_c, lat_c))
-            d_ac = GGA.haversine_distance((lon_a, lat_a), (lon_c, lat_c))
+            d_bc = GlacierHydrology.haversine_distance((lon_b, lat_b), (lon_c, lat_c))
+            d_ac = GlacierHydrology.haversine_distance((lon_a, lat_a), (lon_c, lat_c))
             @test d_ac <= d_ab + d_bc + 1e-6  # Allow tiny numerical error
         end
     end
@@ -182,8 +182,8 @@ import DimensionalData as DD
             original_date = DateTime(year, month, day)
 
             # Convert to decimal year and back
-            decimal = GGA.decimalyear(original_date)
-            recovered_date = GGA.decimalyear2datetime(decimal)
+            decimal = GlacierHydrology.decimalyear(original_date)
+            recovered_date = GlacierHydrology.decimalyear2datetime(decimal)
 
             # Test: Should recover original date (within 1 day due to rounding)
             diff_days = abs(Dates.value(recovered_date - original_date)) / (24 * 60 * 60 * 1000)

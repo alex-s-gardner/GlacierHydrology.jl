@@ -1,4 +1,4 @@
-module GlobalGlacierAnalysis
+module GlacierHydrology
 
    module MyUnits
       using Unitful; @unit Gt "Gt" M 1u"Pg" false
@@ -6,7 +6,7 @@ module GlobalGlacierAnalysis
 
    using Unitful
    Unitful.register(MyUnits)
-   using GlobalGlacierAnalysis.MyUnits
+   using GlacierHydrology.MyUnits
    
    # import geographic packages
    using Proj
@@ -61,7 +61,7 @@ module GlobalGlacierAnalysis
    import GeometryOpsCore as GOC
    import SortTileRecursiveTree
 
-   # Glacier volume change comes from GlacierVolumeChange.jl: GGA reads each ensemble member's volume
+   # Glacier volume change comes from GlacierVolumeChange.jl: this package reads each ensemble member's volume
    # product (`GVC.read_volume`) and uses its geotile, time and fitting helpers listed here.
    import GlacierVolumeChange as GVC
    using GlacierVolumeChange:

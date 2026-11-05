@@ -7,12 +7,12 @@ Uses `write_test_tile` and `test_hypsometry` from test_gemb_tiles.jl.
 """
 
 using Test
-using GlobalGlacierAnalysis
-import GlobalGlacierAnalysis as GGA
+using GlacierHydrology
+import GlacierHydrology
 using DimensionalData
 using Dates
 using DataFrames
-using GlobalGlacierAnalysis.NCDatasets
+using GlacierHydrology.NCDatasets
 using TOML
 
 const _GRID_TILE_SOFTWARE = Dict{String,Any}(
@@ -54,56 +54,56 @@ end
 
 @testset "GEMB physics members" begin
     @testset "member ids and folders" begin
-        @test GGA.check_gemb_physics_member("C-kfit-table") == "C-kfit-table"
-        @test GGA.check_gemb_physics_member(GGA.gemb_reference_physics_member) == "B-kfit-table-w2-g2.5"
-        @test GGA.gemb_physics_member_parts(GGA.gemb_reference_physics_member) ==
+        @test GlacierHydrology.check_gemb_physics_member("C-kfit-table") == "C-kfit-table"
+        @test GlacierHydrology.check_gemb_physics_member(GlacierHydrology.gemb_reference_physics_member) == "B-kfit-table-w2-g2.5"
+        @test GlacierHydrology.gemb_physics_member_parts(GlacierHydrology.gemb_reference_physics_member) ==
               (; tile_member="B-kfit-table-w2", precipitation_gradient=2.5)
         for bad in ("C_ks35_table", "C-ks35", "C/ks35-table", "", :C, "C-kfit-table-g2.5-g5",
                     "C-kfit-g2.5", "C-g2-table")
-            @test_throws "is not a GEMB physics member id" GGA.check_gemb_physics_member(bad)
+            @test_throws "is not a GEMB physics member id" GlacierHydrology.check_gemb_physics_member(bad)
         end
         # A precipitation gradient is a fourth token, in one spelling, and never zero.
-        @test GGA.check_gemb_physics_member("B-kshaw-table-g2.5") == "B-kshaw-table-g2.5"
-        @test GGA.gemb_physics_member_parts("B-kshaw-table-g2.5") == (; tile_member="B-kshaw-table", precipitation_gradient=2.5)
-        @test GGA.gemb_physics_member_parts("B-kfit-table") == (; tile_member="B-kfit-table", precipitation_gradient=0.0)
-        @test GGA.gemb_physics_member_id("B-kfit-table", 5) == "B-kfit-table-g5"
-        @test GGA.gemb_physics_member_id("B-kfit-table", 0) == "B-kfit-table"
-        @test_throws "the gradient-free member is \"B-kfit-table\"" GGA.check_gemb_physics_member("B-kfit-table-g0")
-        @test_throws "write the gradient as \"g5\"" GGA.check_gemb_physics_member("B-kfit-table-g5.0")
-        @test_throws "already carries a precipitation gradient" GGA.gemb_physics_member_id("B-kfit-table-g5", 2.5)
+        @test GlacierHydrology.check_gemb_physics_member("B-kshaw-table-g2.5") == "B-kshaw-table-g2.5"
+        @test GlacierHydrology.gemb_physics_member_parts("B-kshaw-table-g2.5") == (; tile_member="B-kshaw-table", precipitation_gradient=2.5)
+        @test GlacierHydrology.gemb_physics_member_parts("B-kfit-table") == (; tile_member="B-kfit-table", precipitation_gradient=0.0)
+        @test GlacierHydrology.gemb_physics_member_id("B-kfit-table", 5) == "B-kfit-table-g5"
+        @test GlacierHydrology.gemb_physics_member_id("B-kfit-table", 0) == "B-kfit-table"
+        @test_throws "the gradient-free member is \"B-kfit-table\"" GlacierHydrology.check_gemb_physics_member("B-kfit-table-g0")
+        @test_throws "write the gradient as \"g5\"" GlacierHydrology.check_gemb_physics_member("B-kfit-table-g5.0")
+        @test_throws "already carries a precipitation gradient" GlacierHydrology.gemb_physics_member_id("B-kfit-table-g5", 2.5)
         # A further GEMB_GlacierSims level (a forcing correction, say) is a fourth tile-sweep token, and a
         # gradient still follows it.
-        @test GGA.gemb_physics_member_parts("D1-kfit-table-w2") == (; tile_member="D1-kfit-table-w2", precipitation_gradient=0.0)
-        @test GGA.gemb_physics_member_parts("D1-kfit-table-w2-g2.5") == (; tile_member="D1-kfit-table-w2", precipitation_gradient=2.5)
-        @test GGA.gemb_physics_member_id("D1-kfit-table-w2", 5) == "D1-kfit-table-w2-g5"
+        @test GlacierHydrology.gemb_physics_member_parts("D1-kfit-table-w2") == (; tile_member="D1-kfit-table-w2", precipitation_gradient=0.0)
+        @test GlacierHydrology.gemb_physics_member_parts("D1-kfit-table-w2-g2.5") == (; tile_member="D1-kfit-table-w2", precipitation_gradient=2.5)
+        @test GlacierHydrology.gemb_physics_member_id("D1-kfit-table-w2", 5) == "D1-kfit-table-w2-g5"
 
-        root = joinpath(GGA.pathlocal[:data_dir], "binned", "2deg")
+        root = joinpath(GlacierHydrology.pathlocal[:data_dir], "binned", "2deg")
         file = joinpath(root, "glacier_rgi7_dh_cop30_v2_cc_nmad5_v01_filled_ac_p6_synthesized_gembfit.arrow")
-        moved = GGA.gemb_physics_path(file, "C-kfit-table")
+        moved = GlacierHydrology.gemb_physics_path(file, "C-kfit-table")
         @test moved == joinpath(root, "gemb_physics", "C-kfit-table", basename(file))
-        @test GGA.gemb_physics_path(file, nothing) == file
-        @test GGA.gemb_physics_member_from_path(moved) == "C-kfit-table"
-        @test GGA.gemb_physics_member_from_path(file) === nothing
-        @test GGA.gemb_physics_source(moved) == (file, "C-kfit-table")
-        @test GGA.gemb_physics_source(file) == (file, nothing)
+        @test GlacierHydrology.gemb_physics_path(file, nothing) == file
+        @test GlacierHydrology.gemb_physics_member_from_path(moved) == "C-kfit-table"
+        @test GlacierHydrology.gemb_physics_member_from_path(file) === nothing
+        @test GlacierHydrology.gemb_physics_source(moved) == (file, "C-kfit-table")
+        @test GlacierHydrology.gemb_physics_source(file) == (file, nothing)
         # The altimetry member's file-name rules see the same name in a member folder.
-        @test GGA.binned_filled_fileparts(moved) == GGA.binned_filled_fileparts(file)
-        @test_throws "is not a GEMB physics member id" GGA.gemb_physics_path(file, "C_ks35_table")
+        @test GlacierHydrology.binned_filled_fileparts(moved) == GlacierHydrology.binned_filled_fileparts(file)
+        @test_throws "is not a GEMB physics member id" GlacierHydrology.gemb_physics_path(file, "C_ks35_table")
     end
 
     @testset "(run × physics) grid of calibrated syntheses" begin
         runs = ["/data/binned/2deg/glacier_rgi7_dh_cop30_v2_cc_nmad5_v01_filled_ac_p$(p)_synthesized.jld2" for p in (5, 6)]
         members = ["B-kfit-table", "C-kfit-table", "C-kshaw-table"]
-        files = GGA.gembfit_dv_files(runs, members)
+        files = GlacierHydrology.gembfit_dv_files(runs, members)
         @test size(files) == (2, 3)
         @test dims(files, :run) == Dim{:run}(runs)
         @test dims(files, :physics) == Dim{:physics}(members)
         @test files[run=At(runs[2]), physics=At("C-kshaw-table")] ==
               "/data/binned/2deg/gemb_physics/C-kshaw-table/" * replace(basename(runs[2]), ".jld2" => "_gembfit_dv.jld2")
         @test allunique(files)
-        @test all(GGA.gemb_physics_member_from_path(f) == m for (f, m) in zip(files[run=1], members))
-        @test_throws "physics members repeat" GGA.gembfit_dv_files(runs, ["B-kfit-table", "B-kfit-table"])
-        @test_throws "expected `…_synthesized.jld2` altimetry members" GGA.gembfit_dv_files(
+        @test all(GlacierHydrology.gemb_physics_member_from_path(f) == m for (f, m) in zip(files[run=1], members))
+        @test_throws "physics members repeat" GlacierHydrology.gembfit_dv_files(runs, ["B-kfit-table", "B-kfit-table"])
+        @test_throws "expected `…_synthesized.jld2` altimetry members" GlacierHydrology.gembfit_dv_files(
             [replace(runs[1], "_synthesized" => "_aligned")], members)
     end
 
@@ -125,41 +125,41 @@ end
 
         sweep = mkpath(joinpath(mktempdir(), "tile_runs_v2", "C-kfit-table"))
         paths = write_sweep(sweep, ["C-kfit-table", "C-kfit-table"])
-        p = GGA.gemb_tile_provenance(sweep, paths; physics_member="C-kfit-table")
+        p = GlacierHydrology.gemb_tile_provenance(sweep, paths; physics_member="C-kfit-table")
         @test p["tile_run_parameters"] == merge(software, member("C-kfit-table"))
-        @test_throws "tiles of GEMB physics member \"C-kfit-table\", not \"B-kfit-table\"; members must not be mixed" GGA.gemb_tile_provenance(
+        @test_throws "tiles of GEMB physics member \"C-kfit-table\", not \"B-kfit-table\"; members must not be mixed" GlacierHydrology.gemb_tile_provenance(
             sweep, paths; physics_member="B-kfit-table")
-        @test_throws "name the member (physics_member = \"C-kfit-table\")" GGA.gemb_tile_provenance(sweep, paths)
+        @test_throws "name the member (physics_member = \"C-kfit-table\")" GlacierHydrology.gemb_tile_provenance(sweep, paths)
 
         # A WGMS score pairs tiles with fits only of the member it names.
         fits = DataFrame(id=ids, pscale=[1.0, 1.0], ΔT=[0.0, 0.0])
-        @test GGA.wgms_tile_model(sweep, fits; physics_member="C-kfit-table") isa Function
-        @test_throws "tiles of GEMB physics member \"C-kfit-table\", not \"B-kfit-table\"" GGA.wgms_tile_model(
+        @test GlacierHydrology.wgms_tile_model(sweep, fits; physics_member="C-kfit-table") isa Function
+        @test_throws "tiles of GEMB physics member \"C-kfit-table\", not \"B-kfit-table\"" GlacierHydrology.wgms_tile_model(
             sweep, fits; physics_member="B-kfit-table")
 
         # The calibration sidecar records the member beside the code, so GEMB_GlacierSims'
         # `assert_corrections_fitted_on` can compare it with the reference sweep's tiles.
-        gembfit = GGA.gemb_physics_path(joinpath(mktempdir(), "glacier_rgi7_dh_cop30_v2_cc_nmad5_v01_filled_ac_p6_synthesized_gembfit.arrow"),
+        gembfit = GlacierHydrology.gemb_physics_path(joinpath(mktempdir(), "glacier_rgi7_dh_cop30_v2_cc_nmad5_v01_filled_ac_p6_synthesized_gembfit.arrow"),
                                         "C-kfit-table")
         mkpath(dirname(gembfit))
-        stored = TOML.parsefile(GGA.write_gembfit_provenance(gembfit, p))
+        stored = TOML.parsefile(GlacierHydrology.write_gembfit_provenance(gembfit, p))
         @test stored["tile_run_parameters"]["physics_member"] == "C-kfit-table"
         @test stored["tile_run_parameters"]["physics_grain"] == "C"
 
         mixed = mkpath(joinpath(mktempdir(), "tile_runs_mixed"))
         mixed_paths = write_sweep(mixed, ["C-kfit-table", "B-kfit-table"])
-        @test_throws "members must not be mixed" GGA.gemb_tile_provenance(mixed, mixed_paths;
+        @test_throws "members must not be mixed" GlacierHydrology.gemb_tile_provenance(mixed, mixed_paths;
                                                                          physics_member="C-kfit-table")
 
         # process_gemb_tiles reads only the member it is asked for.
-        _, height_centers = GGA.project_height_bins()
+        _, height_centers = GlacierHydrology.project_height_bins()
         area = DimArray(zeros(2, length(height_centers)), (Dim{:geotile}(ids), Dim{:height}(collect(height_centers))))
         area[:, findfirst(==(1050.0), height_centers)] .= 10.0
         dates = [Date(2000, 2, 15), Date(2000, 3, 15)]
-        gemb = GGA.process_gemb_tiles(DataFrame(id=ids), area; tile_dir=sweep, date_center=dates,
+        gemb = GlacierHydrology.process_gemb_tiles(DataFrame(id=ids), area; tile_dir=sweep, date_center=dates,
                                       show_stats=false, physics_member="C-kfit-table")
         @test DimensionalData.metadata(gemb)["tile_provenance"] == p
-        @test_throws "members must not be mixed" GGA.process_gemb_tiles(
+        @test_throws "members must not be mixed" GlacierHydrology.process_gemb_tiles(
             DataFrame(id=ids), area; tile_dir=sweep, date_center=dates, show_stats=false,
             physics_member="B-kfit-table")
 
@@ -168,7 +168,7 @@ end
         shifted_paths = [write_test_tile(joinpath(shifted, "tile_$i.nc"), times, [1050.0]; flux...,
                                          geotile_id=ids[i], run_parameters=merge(software, member("C-kfit-table")),
                                          ΔT=(0.0, 0.5)[i]) for i in 1:2]
-        @test_throws "but the ensemble's is ΔT [0.0] × pscale [1.0]; every tile of a sweep must share it" GGA.process_gemb_tiles(
+        @test_throws "but the ensemble's is ΔT [0.0] × pscale [1.0]; every tile of a sweep must share it" GlacierHydrology.process_gemb_tiles(
             DataFrame(id=ids), area; tile_dir=shifted, date_center=dates, show_stats=false,
             physics_member="C-kfit-table")
     end
@@ -180,11 +180,11 @@ end
         # A dense tile, its axes out of order, beside a tile on the reduced grid alone.
         write_grid_tile(joinpath(dir, "dense.nc"), ids[1], [1.0, -1.0, 0.0], [2.0, 0.5, 1.0]; times)
         write_grid_tile(joinpath(dir, "reduced.nc"), ids[2], [0.0, 1.0], [1.0, 2.0]; times)
-        _, height_centers = GGA.project_height_bins()
+        _, height_centers = GlacierHydrology.project_height_bins()
         area = DimArray(zeros(2, length(height_centers)), (Dim{:geotile}(ids), Dim{:height}(collect(height_centers))))
         area[:, findfirst(==(1050.0), height_centers)] .= 10.0
         dates = [Date(2000, 2, 15), Date(2000, 3, 15)]
-        ensemble(grid) = GGA.process_gemb_tiles(DataFrame(id=ids), area; tile_dir=dir, date_center=dates,
+        ensemble(grid) = GlacierHydrology.process_gemb_tiles(DataFrame(id=ids), area; tile_dir=dir, date_center=dates,
                                             show_stats=false, forcing_grid=grid)
 
         gemb = ensemble((; pscale=[2.0, 1.0], ΔT=[1.0, 0.0]))
@@ -214,26 +214,26 @@ end
         path = write_grid_tile(joinpath(dir, "tile.nc"), ids[1], [0.0], [1.0, 2.0, 4.0]; times,
                                bands=[1050.0, 1150.0], P=(t, p) -> 100.0 * p, Ro=(t, p) -> 5.0 * p^2,
                                run_parameters=member("B-kfit-table"))
-        _, height_centers = GGA.project_height_bins()
+        _, height_centers = GlacierHydrology.project_height_bins()
         area = DimArray(zeros(1, length(height_centers)), (Dim{:geotile}(ids), Dim{:height}(collect(height_centers))))
         area[1, findfirst(==(1050.0), height_centers)] = 10.0
         area[1, findfirst(==(1150.0), height_centers)] = 30.0
         days = Dates.value.(times .- DateTime(1950)) ./ 86_400_000
-        tile_read(g, ps) = GGA.read_gemb_tile(path, area[geotile=At(ids[1])], days; n_pscale=length(ps), n_ΔT=1,
+        tile_read(g, ps) = GlacierHydrology.read_gemb_tile(path, area[geotile=At(ids[1])], days; n_pscale=length(ps), n_ΔT=1,
                                          grid=(; pscale=ps, ΔT=[0.0]), subset=true, precipitation_gradient=g)
 
         # At g = 0 the read is the band sum node by node, exactly.
-        full = GGA.read_gemb_tile(path, area[geotile=At(ids[1])], days; n_pscale=3, n_ΔT=1)
+        full = GlacierHydrology.read_gemb_tile(path, area[geotile=At(ids[1])], days; n_pscale=3, n_ΔT=1)
         flat = tile_read(0.0, [1.0, 2.0, 4.0])
         @test all(flat.layers[k] == full.layers[k] for k in keys(full.layers))
 
         # Mean-centred on the band weights (10 and 30 km² at 1050 and 1150 m: z̄ = 1125 m), 5 % per 100 m:
         # m = 0.9625 and 1.0125, so at pscale 2 the bands sit at 1.925 and 2.025.
         w = [10.0, 30.0] .* 1e-3
-        m = GGA.gemb_band_pscale_multipliers([1050.0, 1150.0], w, 5.0)
+        m = GlacierHydrology.gemb_band_pscale_multipliers([1050.0, 1150.0], w, 5.0)
         @test m ≈ [0.9625, 1.0125]
         @test sum(w .* m) ≈ sum(w)
-        @test all(GGA.gemb_band_pscale_multipliers([1050.0, 1150.0], w, 0.0) .== 1)
+        @test all(GlacierHydrology.gemb_band_pscale_multipliers([1050.0, 1150.0], w, 0.0) .== 1)
         g5 = tile_read(5.0, [2.0])
         n = length(times) - 1
         # Precipitation is linear in pscale, so the gradient moves it between bands and keeps the total.
@@ -246,49 +246,49 @@ end
         @test !(g5.layers[:melt][end] ≈ flat.layers[:melt][end, 2])
 
         # A band pushed off the tile's pscale axis is refused, with the range the tile supports.
-        @test all(GGA.gemb_gradient_pscale_range(m, w, [1.0, 2.0, 4.0]) .≈ (1 / 0.9625, 4 / 1.0125))
+        @test all(GlacierHydrology.gemb_gradient_pscale_range(m, w, [1.0, 2.0, 4.0]) .≈ (1 / 0.9625, 4 / 1.0125))
         @test_throws "outside the tile's axis 1.0..4.0" tile_read(5.0, [4.0])
         @test_throws "supports geotile-mean pscale 1.039..3.951 only" tile_read(5.0, [1.0])
-        @test GGA.gemb_gradient_pscale_range([-0.1, 1.5], w, [1.0, 4.0]) == (Inf, -Inf)
+        @test GlacierHydrology.gemb_gradient_pscale_range([-0.1, 1.5], w, [1.0, 4.0]) == (Inf, -Inf)
 
         # A gradient member covers only the geotiles that support every node of its grid.
         span = (Date(2000, 2, 15), Date(2000, 3, 15))
-        @test GGA.gemb_gradient_supported_geotiles(ids, area, dir, 5.0, [2.0, 3.0]; covering=span).supported == ids
-        out = GGA.gemb_gradient_supported_geotiles(ids, area, dir, 5.0, [1.0, 2.0]; covering=span)
+        @test GlacierHydrology.gemb_gradient_supported_geotiles(ids, area, dir, 5.0, [2.0, 3.0]; covering=span).supported == ids
+        out = GlacierHydrology.gemb_gradient_supported_geotiles(ids, area, dir, 5.0, [1.0, 2.0]; covering=span)
         @test isempty(out.supported)
         @test out.excluded.id == ids
         @test out.excluded.pscale_lo[1] ≈ 1 / 0.9625 && out.excluded.pscale_hi[1] ≈ 4 / 1.0125
-        @test GGA.gemb_gradient_supported_geotiles(ids, area, dir, 2.5, [1.0, 2.0]; covering=span).excluded.id == ids
+        @test GlacierHydrology.gemb_gradient_supported_geotiles(ids, area, dir, 2.5, [1.0, 2.0]; covering=span).excluded.id == ids
 
         # The ensemble of a gradient member names it, so its fits cannot pass as the tile member's.
-        gemb = GGA.process_gemb_tiles(DataFrame(id=ids), area; tile_dir=dir, date_center=[Date(2000, 2, 15), Date(2000, 3, 15)],
+        gemb = GlacierHydrology.process_gemb_tiles(DataFrame(id=ids), area; tile_dir=dir, date_center=[Date(2000, 2, 15), Date(2000, 3, 15)],
                                       show_stats=false, physics_member="B-kfit-table-g5",
                                       forcing_grid=(; pscale=[2.0], ΔT=[0.0]))
         p = DimensionalData.metadata(gemb)["tile_provenance"]["tile_run_parameters"]
         @test p["physics_member"] == "B-kfit-table-g5"
         @test p["physics_precipitation_gradient"] == 5.0
-        @test_throws "members must not be mixed" GGA._check_gemb_physics_provenance(p, "B-kfit-table", "fit")
-        @test_throws "is not a GEMB physics member id" GGA.process_gemb_tiles(
+        @test_throws "members must not be mixed" GlacierHydrology._check_gemb_physics_provenance(p, "B-kfit-table", "fit")
+        @test_throws "is not a GEMB physics member id" GlacierHydrology.process_gemb_tiles(
             DataFrame(id=ids), area; tile_dir=dir, date_center=[Date(2000, 2, 15)], show_stats=false,
             physics_member="B-kfit-table-g0")
 
         # WGMS scoring reads each band at the same pscale, centred on the same hypsometry.
         fits = DataFrame(id=ids, pscale=[2.0], ΔT=[0.0])
-        band = GGA.wgms_tile_model(dir, fits; physics_member="B-kfit-table-g5", area_km2=area)(ids[1])
+        band = GlacierHydrology.wgms_tile_model(dir, fits; physics_member="B-kfit-table-g5", area_km2=area)(ids[1])
         # The band series accumulate from zero before the first output time, over all three intervals.
         @test band.smb[end, :] ≈ 3 .* (100 .* 2 .* m .- ro) ./ 1000 rtol = 1e-6
-        plain = GGA.wgms_tile_model(dir, fits; physics_member="B-kfit-table")(ids[1])
+        plain = GlacierHydrology.wgms_tile_model(dir, fits; physics_member="B-kfit-table")(ids[1])
         @test plain.smb[end, :] ≈ 3 .* fill(200 - 20, 2) ./ 1000 rtol = 1e-6
-        @test_throws "pass area_km2" GGA.wgms_tile_model(dir, fits; physics_member="B-kfit-table-g5")
+        @test_throws "pass area_km2" GlacierHydrology.wgms_tile_model(dir, fits; physics_member="B-kfit-table-g5")
 
         # gemb_info: a gradient member reads its tile member's sweep, on the gradient grid, into a file
         # of its own; production has none yet.
-        i5 = GGA.gemb_info(; gemb_run_id=10, physics_member="B-kfit-table-g5")
-        i0 = GGA.gemb_info(; gemb_run_id=10, physics_member="B-kfit-table")
+        i5 = GlacierHydrology.gemb_info(; gemb_run_id=10, physics_member="B-kfit-table-g5")
+        i0 = GlacierHydrology.gemb_info(; gemb_run_id=10, physics_member="B-kfit-table")
         @test i5.tile_dir == i0.tile_dir
         @test i5.filename_gemb_combined != i0.filename_gemb_combined
-        @test i5.forcing_grid == GGA.gemb_pilot_gradient_forcing_grid
-        @test_throws "defined for the pilot sweep (GEMB run 10) only" GGA.gemb_info(; gemb_run_id=9, physics_member="B-kfit-table-g5")
+        @test i5.forcing_grid == GlacierHydrology.gemb_pilot_gradient_forcing_grid
+        @test_throws "defined for the pilot sweep (GEMB run 10) only" GlacierHydrology.gemb_info(; gemb_run_id=9, physics_member="B-kfit-table-g5")
     end
 
     @testset "the pilot sweep: own tiles, complete groups, no pscale windows" begin
@@ -300,33 +300,33 @@ end
             write_test_tile(joinpath(dir, "tile_$(hash(id)).nc"), times, [1050.0]; flux..., geotile_id=id)
         end
         ids = ["lat[+58+60]lon[-138-136]", "lat[+60+62]lon[-140-138]", "lat[+60+62]lon[-142-140]"]
-        @test GGA.gemb_tile_own_geotiles(ids, dir; covering=(Date(2000, 2, 15), Date(2000, 3, 15))) ==
+        @test GlacierHydrology.gemb_tile_own_geotiles(ids, dir; covering=(Date(2000, 2, 15), Date(2000, 3, 15))) ==
               ids[2:3]
-        @test isempty(GGA.gemb_tile_own_geotiles(ids, dir; covering=(Date(2000, 2, 15), Date(2001, 3, 15))))
+        @test isempty(GlacierHydrology.gemb_tile_own_geotiles(ids, dir; covering=(Date(2000, 2, 15), Date(2001, 3, 15))))
 
         # A group is fitted only when all its geotiles are in the ensemble.
         groups = DataFrame(id=["a", "b", "c", "d"], group=[1, 1, 2, 3])
         present = DataFrame(id=["a", "c", "d"], group=[1, 2, 3], extra=[10, 20, 30])
-        kept = GGA.complete_geotile_groups(present, groups)
+        kept = GlacierHydrology.complete_geotile_groups(present, groups)
         @test kept.id == ["c", "d"]
         @test kept.extra == [20, 30]
 
         # The sanity windows can be skipped for the pilot only.
-        run = joinpath(GGA.pathlocal[:data_dir], "binned", "2deg",
+        run = joinpath(GlacierHydrology.pathlocal[:data_dir], "binned", "2deg",
                        "glacier_rgi7_dh_best_cc_nmad3_v01_filled_ac_p6_synthesized.jld2")
         dims4 = (Dim{:geotile}(["lat[+60+62]lon[-142-140]"]), Dim{:date}([Date(2000, 1, 15)]),
                  Dim{:pscale}([1.0]), Dim{:ΔT}([0.0]))
         dv(id) = DimArray(zeros(1, 1, 1, 1), dims4;
                           metadata=Dict("surface_mask" => "glacier_rgi7", "gemb_run_id" => id))
-        @test_throws "pscale_sanity_check can be turned off only for the pilot sweep (GEMB run 10)" GGA.gemb_calibration(
+        @test_throws "pscale_sanity_check can be turned off only for the pilot sweep (GEMB run 10)" GlacierHydrology.gemb_calibration(
             [run], dv(9); distance_from_origin_penalty=0, pscale_sanity_check=false)
         # For the pilot the guard passes, and the call fails later on the absent tile provenance.
-        @test_throws "dv_gemb records no tile_provenance" GGA.gemb_calibration(
+        @test_throws "dv_gemb records no tile_provenance" GlacierHydrology.gemb_calibration(
             [run], dv(10); distance_from_origin_penalty=0)
     end
 
     @testset "the calibrated synthesis reads one member's ensembles" begin
-        run = joinpath(GGA.pathlocal[:data_dir], "binned", "2deg",
+        run = joinpath(GlacierHydrology.pathlocal[:data_dir], "binned", "2deg",
                        "glacier_rgi7_dh_best_cc_nmad3_v01_filled_ac_p6_synthesized.jld2")
         dims4 = (Dim{:geotile}(["lat[+60+62]lon[-142-140]"]), Dim{:date}([Date(2000, 1, 15)]),
                  Dim{:pscale}([1.0]), Dim{:ΔT}([0.0]))
@@ -334,10 +334,10 @@ end
                                                  metadata=Dict("surface_mask" => "glacier_rgi7",
                                                                "gemb_physics_member" => member))))
         discharge = DimArray(zeros(1), dims4[1]; metadata=Dict("surface_mask" => "glacier_rgi7"))
-        @test GGA.gemb_physics_member(stack("C-kfit-table")[:dv]) == "C-kfit-table"
-        @test GGA.gemb_physics_member(DimArray(zeros(1), dims4[1])) === nothing
+        @test GlacierHydrology.gemb_physics_member(stack("C-kfit-table")[:dv]) == "C-kfit-table"
+        @test GlacierHydrology.gemb_physics_member(DimArray(zeros(1), dims4[1])) === nothing
         run_rgi6 = replace(run, "glacier_rgi7" => "glacier")
-        @test_throws "the GEMB ensembles passed are of different physics members (\"B-kfit-table\", \"C-kfit-table\")" GGA.geotile_synthesis_gembfit_dv(
+        @test_throws "the GEMB ensembles passed are of different physics members (\"B-kfit-table\", \"C-kfit-table\")" GlacierHydrology.geotile_synthesis_gembfit_dv(
             [run, run_rgi6],
             Dict("glacier_rgi7" => discharge,
                  "glacier" => DimArray(zeros(1), dims4[1]; metadata=Dict("surface_mask" => "glacier"))),

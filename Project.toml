@@ -1,4 +1,4 @@
-name = "GlobalGlacierAnalysis"
+name = "GlacierHydrology"
 uuid = "d9107a52-f194-45c7-a473-1d13678f1fe6"
 version = "0.0.2"
 authors = ["Alex S. Gardner, JPL"]

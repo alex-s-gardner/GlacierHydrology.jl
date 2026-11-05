@@ -6,9 +6,9 @@ reader's matrix-vector formulation.
 """
 
 using Test
-using GlobalGlacierAnalysis
-import GlobalGlacierAnalysis as GGA
-using GlobalGlacierAnalysis.NCDatasets
+using GlacierHydrology
+import GlacierHydrology
+using GlacierHydrology.NCDatasets
 using DimensionalData
 using Dates
 using Random
@@ -52,7 +52,7 @@ end
 
 # Hypsometry on the project height bins with `km2` at the given bin centers and zero elsewhere.
 function test_hypsometry(km2_at)
-    _, height_centers = GGA.project_height_bins()
+    _, height_centers = GlacierHydrology.project_height_bins()
     area = DimArray(zeros(length(height_centers)), Dim{:height}(collect(height_centers)))
     for (h, a) in km2_at
         area[height=At(h)] = a
@@ -83,7 +83,7 @@ referenced(per_interval) = (c = cumsum(per_interval); c .- first(c))
         area = test_hypsometry((1050.0 => 10.0, 1150.0 => 30.0, 1250.0 => 5.0))
 
         path = write_test_tile(joinpath(mktempdir(), "tile.nc"), times, band_centers; P, Rn, Ro, Rf, Mt, EC, firn)
-        tile = GGA.read_gemb_tile(path, area, days_since_epoch(times); n_pscale=1, n_ΔT=1)
+        tile = GlacierHydrology.read_gemb_tile(path, area, days_since_epoch(times); n_pscale=1, n_ΔT=1)
         L = Dict(k => vec(v) for (k, v) in tile.layers)
 
         # Hand calculation in BigFloat: band weights 10 and 35 km² = 0.010 and 0.035 km³ per metre.
@@ -142,7 +142,7 @@ referenced(per_interval) = (c = cumsum(per_interval); c .- first(c))
         area = test_hypsometry(h => a for (h, a) in zip(band_centers, (3.0, 8.0, 12.0, 6.0, 1.0)))
 
         path = write_test_tile(joinpath(mktempdir(), "tile.nc"), times, band_centers; P, Rn, Ro, Rf, Mt, EC, firn)
-        tile = GGA.read_gemb_tile(path, area, days_since_epoch(times); n_pscale=1, n_ΔT=1)
+        tile = GlacierHydrology.read_gemb_tile(path, area, days_since_epoch(times); n_pscale=1, n_ΔT=1)
         L = Dict(k => vec(v) for (k, v) in tile.layers)
 
         ρ = big"917"
@@ -180,54 +180,54 @@ referenced(per_interval) = (c = cumsum(per_interval); c .- first(c))
         paths = [write_test_tile(joinpath(sweep, "tile_$i.nc"), times, [1050.0]; flux...,
                                  geotile_id=ids[i], run_parameters=tile_parameters[i]) for i in 1:2]
 
-        provenance = GGA.gemb_tile_provenance(sweep, paths)
+        provenance = GlacierHydrology.gemb_tile_provenance(sweep, paths)
         @test provenance["tile_dir"] == realpath(sweep)
         @test provenance["tile_run_parameters"] == software
 
         # process_gemb_tiles records the provenance of the files it read.
-        _, height_centers = GGA.project_height_bins()
+        _, height_centers = GlacierHydrology.project_height_bins()
         dgeotile = Dim{:geotile}(ids)
         area = DimArray(zeros(2, length(height_centers)), (dgeotile, Dim{:height}(collect(height_centers))))
         area[:, findfirst(==(1050.0), height_centers)] .= 10.0
-        gemb = GGA.process_gemb_tiles(DataFrame(id=ids), area; tile_dir=sweep,
+        gemb = GlacierHydrology.process_gemb_tiles(DataFrame(id=ids), area; tile_dir=sweep,
                                       date_center=[Date(2000, 2, 15), Date(2000, 3, 15)], show_stats=false)
         @test DimensionalData.metadata(gemb)["tile_provenance"] == provenance
 
         # The calibration output's sidecar, in GEMB_GlacierSims' format.
         gembfit = joinpath(mktempdir(), "glacier_rgi7_dh_cop30_v2_cc_nmad5_v01_filled_ac_p6_synthesized_gembfit.arrow")
-        sidecar = GGA.write_gembfit_provenance(gembfit, provenance)
+        sidecar = GlacierHydrology.write_gembfit_provenance(gembfit, provenance)
         @test sidecar == replace(gembfit, ".arrow" => "_provenance.toml")
-        @test sidecar == GGA.gembfit_provenance_file(gembfit)
+        @test sidecar == GlacierHydrology.gembfit_provenance_file(gembfit)
         stored = TOML.parsefile(sidecar)
         @test stored == Dict{String,Any}("tile_dir" => realpath(sweep), "tile_run_parameters" => software)
 
         # What GEMB_GlacierSims' `assert_corrections_fitted_on` checks, against each tile's own record
         # (read here straight from the attributes): the directory, the three trees, and every recorded key.
         @test realpath(stored["tile_dir"]) == realpath(sweep)
-        @test all(haskey(stored["tile_run_parameters"], k) for k in GGA.GEMB_TILE_PROVENANCE_REQUIRED)
+        @test all(haskey(stored["tile_run_parameters"], k) for k in GlacierHydrology.GEMB_TILE_PROVENANCE_REQUIRED)
         for path in paths
-            attributes = GGA.NCDatasets.NCDataset(path, "r") do ds
+            attributes = GlacierHydrology.NCDatasets.NCDataset(path, "r") do ds
                 Dict(k => ds.attrib[k] for k in split(ds.attrib["run_parameters"]))
             end
             @test all(attributes[k] == v for (k, v) in stored["tile_run_parameters"])
         end
 
-        @test_throws "not an .arrow calibration output" GGA.gembfit_provenance_file(replace(gembfit, ".arrow" => ".jld2"))
+        @test_throws "not an .arrow calibration output" GlacierHydrology.gembfit_provenance_file(replace(gembfit, ".arrow" => ".jld2"))
 
         # Tiles of two sweeps, or a tile that does not record its code, are refused before any read.
         mixed = mkpath(joinpath(mktempdir(), "tile_runs_mixed"))
         other = merge(software, Dict{String,Any}("software_gemb_tree" => "4444444444444444444444444444444444444444"))
         mixed_paths = [write_test_tile(joinpath(mixed, "tile_$i.nc"), times, [1050.0]; flux...,
                                        geotile_id=ids[i], run_parameters=(software, other)[i]) for i in 1:2]
-        @test_throws "GEMB tile files disagree on software_gemb_tree" GGA.gemb_tile_provenance(mixed, mixed_paths)
-        @test_throws "GEMB tile files disagree on software_gemb_tree" GGA.process_gemb_tiles(
+        @test_throws "GEMB tile files disagree on software_gemb_tree" GlacierHydrology.gemb_tile_provenance(mixed, mixed_paths)
+        @test_throws "GEMB tile files disagree on software_gemb_tree" GlacierHydrology.process_gemb_tiles(
             DataFrame(id=ids), area; tile_dir=mixed, date_center=[Date(2000, 2, 15)], show_stats=false)
 
         untraced = mkpath(joinpath(mktempdir(), "tile_runs_untraced"))
         partial = Dict{String,Any}(k => v for (k, v) in software if k != "software_gemb_glaciersims_tree")
         untraced_path = write_test_tile(joinpath(untraced, "tile.nc"), times, [1050.0]; flux...,
                                         run_parameters=partial)
-        @test_throws "records no software_gemb_glaciersims_tree" GGA.gemb_tile_provenance(untraced, [untraced_path])
-        @test_throws "tile files outside" GGA.gemb_tile_provenance(sweep, [untraced_path])
+        @test_throws "records no software_gemb_glaciersims_tree" GlacierHydrology.gemb_tile_provenance(untraced, [untraced_path])
+        @test_throws "tile files outside" GlacierHydrology.gemb_tile_provenance(sweep, [untraced_path])
     end
 end

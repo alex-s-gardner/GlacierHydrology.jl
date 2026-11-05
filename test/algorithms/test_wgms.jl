@@ -7,9 +7,9 @@ value and every window balance is known exactly.
 """
 
 using Test
-using GlobalGlacierAnalysis
-import GlobalGlacierAnalysis as GGA
-using GlobalGlacierAnalysis.NCDatasets
+using GlacierHydrology
+import GlacierHydrology
+using GlacierHydrology.NCDatasets
 using DataFrames
 using Dates
 using Statistics
@@ -85,7 +85,7 @@ function linear_rate_model(centers, t0, t1; α=0.01, β=-1e-5, refreeze_rate=0.0
     time = collect(DateTime(t0):Day(1):DateTime(t1))
     d = [Dates.value(t - first(time)) / 86_400_000 for t in time]
     rate = α .+ β .* centers
-    return GGA.GEMBBandSMB(centers, time, d * rate', d * fill(refreeze_rate, length(centers))',
+    return GlacierHydrology.GEMBBandSMB(centers, time, d * rate', d * fill(refreeze_rate, length(centers))',
                            d * fill(height_rate, length(centers))')
 end
 
@@ -106,7 +106,7 @@ spec(id, region, area, source, provenance; years=2000:2001, elevations=(2000, 21
 
 @testset "WGMS seasonal validation" begin
     dir = write_fog(joinpath(mktempdir(), "data"))
-    wgms = GGA.read_wgms(dir)
+    wgms = GlacierHydrology.read_wgms(dir)
 
     @testset "reader" begin
         @test nrow(wgms.glaciers) == 2 && nrow(wgms.points) == length(_POINTS) && nrow(wgms.bands) == 4
@@ -116,7 +116,7 @@ spec(id, region, area, source, provenance; years=2000:2001, elevations=(2000, 21
         @test !("winter_balance" in names(wgms.glacier_years))   # glacier-wide balances are not read
         @test all(ismissing, wgms.glacier_years.area) && all(ismissing, wgms.glaciers.area_km2)
 
-        bad(f; kw...) = GGA.read_wgms(write_fog(joinpath(mktempdir(), "data"); kw...))
+        bad(f; kw...) = GlacierHydrology.read_wgms(write_fog(joinpath(mktempdir(), "data"); kw...))
         @test_throws "lacks column(s) balance_code" bad(nothing; point_header=replace(_POINT_HEADER, "balance_code" => "code"))
         @test_throws "begin_date = \"2009-13-01\" is not a yyyy-mm-dd date" bad(nothing;
             points=[replace(_POINTS[1], "2009-10-01" => "2009-13-01")])
@@ -133,16 +133,16 @@ spec(id, region, area, source, provenance; years=2000:2001, elevations=(2000, 21
     end
 
     @testset "geotile ids" begin
-        @test GGA.wgms_geotile_id(46.51, 8.11) == "lat[+46+48]lon[+008+010]"
-        @test GGA.wgms_geotile_id(64.81, -18.91) == "lat[+64+66]lon[-020-018]"
-        @test GGA.wgms_geotile_id(-43.1, 171.4) == "lat[-44-42]lon[+170+172]"
-        @test GGA.wgms_geotile_id(46.0, 8.0) == "lat[+46+48]lon[+008+010]"     # an edge belongs north and east
-        @test GGA.wgms_geotile_id(90.0, 180.0) == "lat[+88+90]lon[+178+180]"
-        @test_throws "latitude 91 is outside" GGA.wgms_geotile_id(91, 0)
+        @test GlacierHydrology.wgms_geotile_id(46.51, 8.11) == "lat[+46+48]lon[+008+010]"
+        @test GlacierHydrology.wgms_geotile_id(64.81, -18.91) == "lat[+64+66]lon[-020-018]"
+        @test GlacierHydrology.wgms_geotile_id(-43.1, 171.4) == "lat[-44-42]lon[+170+172]"
+        @test GlacierHydrology.wgms_geotile_id(46.0, 8.0) == "lat[+46+48]lon[+008+010]"     # an edge belongs north and east
+        @test GlacierHydrology.wgms_geotile_id(90.0, 180.0) == "lat[+88+90]lon[+178+180]"
+        @test_throws "latitude 91 is outside" GlacierHydrology.wgms_geotile_id(91, 0)
     end
 
     @testset "point quality control" begin
-        P = GGA.wgms_seasonal_points(wgms)
+        P = GlacierHydrology.wgms_seasonal_points(wgms)
         reasons = Dict(r.id => r.reason for r in eachrow(P.excluded))
         @test reasons == Dict(4 => "annual", 5 => "index", 6 => "no elevation", 7 => "mislocated",
                               8 => "date uncertain", 9 => "window length", 10 => "remarks",
@@ -163,7 +163,7 @@ spec(id, region, area, source, provenance; years=2000:2001, elevations=(2000, 21
     end
 
     @testset "band quality control" begin
-        B = GGA.wgms_seasonal_bands(wgms)
+        B = GlacierHydrology.wgms_seasonal_bands(wgms)
         @test nrow(B.records) == 3
         kept = Set(zip(B.records.z_lo, B.records.season))
         @test kept == Set([(2500.0, :winter), (2500.0, :summer), (2600.0, :winter)])
@@ -181,29 +181,29 @@ spec(id, region, area, source, provenance; years=2000:2001, elevations=(2000, 21
     @testset "elevation weights" begin
         c = [1050.0, 1150.0, 1250.0]
         v = [3.0, 5.0, 4.0]
-        @test GGA.wgms_band_weights(c, 1150, 1150) == [0.0, 1.0, 0.0]
-        @test GGA.wgms_band_weights(c, 1075, 1075) ⋅ v ≈ 3.5
-        @test GGA.wgms_band_weights(c, 1020, 1020) ⋅ v == 3.0          # held for ≤ 50 m
-        @test GGA.wgms_band_weights(c, 1290, 1300) ⋅ v == 4.0
-        @test isnothing(GGA.wgms_band_weights(c, 990, 990))
-        @test isnothing(GGA.wgms_band_weights(c, 1200, 1310))
+        @test GlacierHydrology.wgms_band_weights(c, 1150, 1150) == [0.0, 1.0, 0.0]
+        @test GlacierHydrology.wgms_band_weights(c, 1075, 1075) ⋅ v ≈ 3.5
+        @test GlacierHydrology.wgms_band_weights(c, 1020, 1020) ⋅ v == 3.0          # held for ≤ 50 m
+        @test GlacierHydrology.wgms_band_weights(c, 1290, 1300) ⋅ v == 4.0
+        @test isnothing(GlacierHydrology.wgms_band_weights(c, 990, 990))
+        @test isnothing(GlacierHydrology.wgms_band_weights(c, 1200, 1310))
         # Mean of a linear piece is its midpoint value; across the 1150 knot the profile runs 4 → 5 → 4.5
         # and the integral is two trapezoids: ((4+5)/2·50 + (5+4.5)/2·50) / 100 = 4.625.
-        @test GGA.wgms_band_weights(c, 1050, 1100) ⋅ v ≈ 3.5
-        @test GGA.wgms_band_weights(c, 1100, 1200) ⋅ v ≈ 4.625
+        @test GlacierHydrology.wgms_band_weights(c, 1050, 1100) ⋅ v ≈ 3.5
+        @test GlacierHydrology.wgms_band_weights(c, 1100, 1200) ⋅ v ≈ 4.625
         # Partly beyond the outermost centre: constant 3 over [1000, 1050], then 3 → 4 over [1050, 1100].
-        @test GGA.wgms_band_weights(c, 1000, 1100) ⋅ v ≈ (3 * 50 + 3.5 * 50) / 100
-        @test sum(GGA.wgms_band_weights(c, 1010, 1290)) ≈ 1
-        @test GGA.wgms_band_weights([2000.0], 1960, 2040) == [1.0]
-        @test_throws "z_lo = 10 is above z_hi = 5" GGA.wgms_band_weights(c, 10, 5)
+        @test GlacierHydrology.wgms_band_weights(c, 1000, 1100) ⋅ v ≈ (3 * 50 + 3.5 * 50) / 100
+        @test sum(GlacierHydrology.wgms_band_weights(c, 1010, 1290)) ≈ 1
+        @test GlacierHydrology.wgms_band_weights([2000.0], 1960, 2040) == [1.0]
+        @test_throws "z_lo = 10 is above z_hi = 5" GlacierHydrology.wgms_band_weights(c, 10, 5)
     end
 
     @testset "model balances over each record's own window" begin
         centers = collect(2050.0:100:2950.0)
         α, β = 0.01, -1e-5
         model = linear_rate_model(centers, Date(2000), Date(2020); α, β)
-        rec = GGA.wgms_seasonal_points(wgms).records
-        m = GGA.wgms_model_balances(rec, id -> id == "lat[+46+48]lon[+008+010]" ? model : nothing)
+        rec = GlacierHydrology.wgms_seasonal_points(wgms).records
+        m = GlacierHydrology.wgms_model_balances(rec, id -> id == "lat[+46+48]lon[+008+010]" ? model : nothing)
         @test nrow(m.matched) == 5 && isempty(m.excluded)
         for r in eachrow(m.matched)
             days = Dates.value(r.end_date - r.begin_date)
@@ -216,7 +216,7 @@ spec(id, region, area, source, provenance; years=2000:2001, elevations=(2000, 21
 
         # Envelope: ends moved by ±10 days give windows of days ∓ 20.
         one = copy(rec[1:1, :]); one.begin_date_unc .= 10; one.end_date_unc .= 10
-        e = GGA.wgms_model_balances(one, _ -> model).matched[1, :]
+        e = GlacierHydrology.wgms_model_balances(one, _ -> model).matched[1, :]
         days = Dates.value(e.end_date - e.begin_date)
         rate = α + β * e.z_lo
         @test rate < 0      # so the wider window gives the lower balance
@@ -224,24 +224,24 @@ spec(id, region, area, source, provenance; years=2000:2001, elevations=(2000, 21
 
         # A level between output times is interpolated linearly: weekly levels of a constant rate give
         # the exact window balance at any day.
-        weekly = GGA.GEMBBandSMB(centers, model.time[1:7:end], model.smb[1:7:end, :])
-        mw = GGA.wgms_model_balances(rec, _ -> weekly).matched
+        weekly = GlacierHydrology.GEMBBandSMB(centers, model.time[1:7:end], model.smb[1:7:end, :])
+        mw = GlacierHydrology.wgms_model_balances(rec, _ -> weekly).matched
         @test mw.model ≈ m.matched.model rtol = 1e-12
         @test all(ismissing, mw.model_refreeze)
 
         short = linear_rate_model(centers, Date(2009, 11, 1), Date(2020))
-        x = GGA.wgms_model_balances(rec, _ -> short)
+        x = GlacierHydrology.wgms_model_balances(rec, _ -> short)
         @test x.excluded.reason == fill("outside model record", 4)   # the four winter records start 2009-10-01
         high = linear_rate_model([3550.0, 3650.0], Date(2000), Date(2020))
-        @test all(==("outside band range"), GGA.wgms_model_balances(rec, _ -> high).excluded.reason)
+        @test all(==("outside band range"), GlacierHydrology.wgms_model_balances(rec, _ -> high).excluded.reason)
     end
 
     @testset "GEMBBandSMB checks its inputs" begin
         t = [DateTime(2000), DateTime(2000, 1, 2)]
-        @test_throws "band centers are not strictly ascending" GGA.GEMBBandSMB([2.0, 1.0], t, zeros(2, 2))
-        @test_throws DimensionMismatch GGA.GEMBBandSMB([1.0, 2.0], t, zeros(3, 2))
-        @test_throws "smb holds non-finite values" GGA.GEMBBandSMB([1.0, 2.0], t, [0.0 NaN; 0.0 0.0])
-        @test_throws "not strictly ascending" GGA.GEMBBandSMB([1.0, 2.0], reverse(t), zeros(2, 2))
+        @test_throws "band centers are not strictly ascending" GlacierHydrology.GEMBBandSMB([2.0, 1.0], t, zeros(2, 2))
+        @test_throws DimensionMismatch GlacierHydrology.GEMBBandSMB([1.0, 2.0], t, zeros(3, 2))
+        @test_throws "smb holds non-finite values" GlacierHydrology.GEMBBandSMB([1.0, 2.0], t, [0.0 NaN; 0.0 0.0])
+        @test_throws "not strictly ascending" GlacierHydrology.GEMBBandSMB([1.0, 2.0], reverse(t), zeros(2, 2))
     end
 
     @testset "tile file at fitted corrections, bilinear across the forcing nodes" begin
@@ -270,7 +270,7 @@ spec(id, region, area, source, provenance; years=2000:2001, elevations=(2000, 21
             end
         end
         p, d = 1.4, 0.5
-        m = GGA.gemb_tile_band_smb(path; pscale=p, ΔT=d)
+        m = GlacierHydrology.gemb_tile_band_smb(path; pscale=p, ΔT=d)
         @test m.band_centers == centers && m.time == times
         k = collect(1:length(times))
         for (j, z) in enumerate(centers)
@@ -278,13 +278,13 @@ spec(id, region, area, source, provenance; years=2000:2001, elevations=(2000, 21
             @test m.refreeze[:, j] ≈ k .* (d + 2) ./ 1000 rtol = 1e-6
         end
         @test isnothing(m.height)
-        @test_throws "outside the forcing grid" GGA.gemb_tile_band_smb(path; pscale=2.5, ΔT=0.0)
+        @test_throws "outside the forcing grid" GlacierHydrology.gemb_tile_band_smb(path; pscale=2.5, ΔT=0.0)
 
         fits = DataFrame(id=["lat[+46+48]lon[+008+010]", "lat[+64+66]lon[-020-018]"], pscale=[p, 1.0], ΔT=[d, 0.0])
-        model = GGA.wgms_tile_model(tile_dir, fits)
+        model = GlacierHydrology.wgms_tile_model(tile_dir, fits)
         @test model("lat[+46+48]lon[+008+010]").smb ≈ m.smb
         @test isnothing(model("lat[+64+66]lon[-020-018]"))     # fitted, but no tile file
-        uncal = GGA.wgms_tile_model(tile_dir, fits; pscale=1.0, ΔT=0.0)
+        uncal = GlacierHydrology.wgms_tile_model(tile_dir, fits; pscale=1.0, ΔT=0.0)
         @test uncal("lat[+46+48]lon[+008+010]").smb[end, 1] ≈ length(times) * (10 - 3 - 0.5) / 1000 rtol = 1e-6
     end
 
@@ -296,7 +296,7 @@ spec(id, region, area, source, provenance; years=2000:2001, elevations=(2000, 21
                 for g in 1:2, y in 2010:2015, z in (2000, 2200, 2400), s in (:winter, :summer)]
         df = DataFrame(vec(rows))
         df.model = 2 .* df.obs .+ 0.5
-        st = GGA.wgms_seasonal_statistics(df)
+        st = GlacierHydrology.wgms_seasonal_statistics(df)
         for r in eachrow(st)
             o = df.obs[df.season .=== r.season]
             @test r.n == 36 && r.n_glaciers == 2 && r.n_glacier_years == 12
@@ -304,23 +304,23 @@ spec(id, region, area, source, provenance; years=2000:2001, elevations=(2000, 21
             @test r.rmse ≈ sqrt(mean((o .+ 0.5) .^ 2))
             @test r.r ≈ 1
         end
-        eb = GGA.wgms_seasonal_statistics(df; elevation_bin_m=250)
+        eb = GlacierHydrology.wgms_seasonal_statistics(df; elevation_bin_m=250)
         @test sort(unique(eb.z_bin)) == [2000.0, 2250.0] && sum(eb.n) == nrow(df)
 
-        g = GGA.wgms_vertical_gradients(df)
+        g = GlacierHydrology.wgms_vertical_gradients(df)
         @test nrow(g) == 2 * 6 * 2 && all(g.span_m .== 400)
         @test all(g.z_min .== 2000) && all(g.z_max .== 2400)
         @test all(g.obs_gradient_se .< 1e-12)            # exactly linear in z
         @test all(g.obs_gradient[g.season .=== :winter] .≈ 0.2)
         @test all(g.model_gradient[g.season .=== :summer] .≈ -0.8)
-        @test nrow(GGA.wgms_vertical_gradients(df; min_span_m=500)) == 0
+        @test nrow(GlacierHydrology.wgms_vertical_gradients(df; min_span_m=500)) == 0
 
-        a = GGA.wgms_anomaly_correlation(df)
+        a = GlacierHydrology.wgms_anomaly_correlation(df)
         @test all(a.n_sites .== 6) && all(a.r_anomaly .≈ 1)
         @test all(a.model_anomaly_sd .≈ 2 .* a.obs_anomaly_sd)
-        @test isempty(GGA.wgms_anomaly_correlation(df; min_years=7))
+        @test isempty(GlacierHydrology.wgms_anomaly_correlation(df; min_years=7))
 
-        ratio = GGA.wgms_seasonal_ratio(df)
+        ratio = GlacierHydrology.wgms_seasonal_ratio(df)
         w, s = df.season .=== :winter, df.season .=== :summer
         @test ratio.n_pairs == [36]
         @test ratio.obs_ratio[1] ≈ mean(df.obs[w]) / mean(-df.obs[s])
@@ -329,14 +329,14 @@ spec(id, region, area, source, provenance; years=2000:2001, elevations=(2000, 21
 
     @testset "snow densities from a column" begin
         dz, rho = [0.5, 0.5, 1.0], [300.0, 400.0, 500.0]
-        @test GGA.top_mass_bulk_density(dz, rho, 150) ≈ 300
-        @test GGA.top_mass_bulk_density(dz, rho, 350) ≈ 350 / (0.5 + 0.5)
-        @test GGA.top_mass_bulk_density(dz, rho, 600) ≈ 600 / (1.0 + 250 / 500)
-        @test_throws "holds 850.0 kg m-2, less than" GGA.top_mass_bulk_density(dz, rho, 900)
+        @test GlacierHydrology.top_mass_bulk_density(dz, rho, 150) ≈ 300
+        @test GlacierHydrology.top_mass_bulk_density(dz, rho, 350) ≈ 350 / (0.5 + 0.5)
+        @test GlacierHydrology.top_mass_bulk_density(dz, rho, 600) ≈ 600 / (1.0 + 250 / 500)
+        @test_throws "holds 850.0 kg m-2, less than" GlacierHydrology.top_mass_bulk_density(dz, rho, 900)
         age = [20.0, 100.0, 400.0]
-        y = GGA.young_snow_bulk_density(dz, rho, age, 200)
+        y = GlacierHydrology.young_snow_bulk_density(dz, rho, age, 200)
         @test (y.mass, y.depth, y.density) == (350.0, 1.0, 350.0)
-        @test isnan(GGA.young_snow_bulk_density(dz, rho, age, 10).density)
+        @test isnan(GlacierHydrology.young_snow_bulk_density(dz, rho, age, 10).density)
     end
 
     @testset "end to end: the true model scores zero error" begin
@@ -347,8 +347,8 @@ spec(id, region, area, source, provenance; years=2000:2001, elevations=(2000, 21
         rate = z -> (1.0 + 0.002 * (z - 2550)) / 212
         time = collect(DateTime(2009, 10, 1):Day(1):DateTime(2010, 5, 1))
         d = [Dates.value(t - first(time)) / 86_400_000 for t in time]
-        model = GGA.GEMBBandSMB(centers, time, d * rate.(centers)')
-        v = GGA.wgms_validation(id -> id == "lat[+46+48]lon[+008+010]" ? model : nothing; wgms, label="truth")
+        model = GlacierHydrology.GEMBBandSMB(centers, time, d * rate.(centers)')
+        v = GlacierHydrology.wgms_validation(id -> id == "lat[+46+48]lon[+008+010]" ? model : nothing; wgms, label="truth")
         bw = v.matched[(v.matched.source .=== :band) .& (v.matched.season .=== :winter), :]
         @test nrow(bw) == 2 && all(v.matched.label .== "truth")
         # Covariates: the fixture reports no glacier area; both bands lie inside the winter stakes'
@@ -362,12 +362,12 @@ spec(id, region, area, source, provenance; years=2000:2001, elevations=(2000, 21
         @test sum(v.excluded_model.n[v.excluded_model.reason .== "outside model record"]) == 2
         @test sum(v.excluded_qc.n[v.excluded_qc.source .=== :point]) == 13
 
-        card = GGA.wgms_scorecard(v; min_n=1)
+        card = GlacierHydrology.wgms_scorecard(v; min_n=1)
         bw_card = card[(card.source .=== :band) .& (card.season .=== :winter), :]
         @test nrow(bw_card) == 1 && bw_card.label[1] == "truth" && bw_card.n[1] == 2
         @test bw_card.mean_abs_bias[1] < 1e-12 && bw_card.mean_rmse[1] < 1e-12
         @test isnan(bw_card.median_r_anomaly[1])            # one year: no anomaly
-        @test nrow(GGA.wgms_scorecard(v; min_n=100)) == 0
+        @test nrow(GlacierHydrology.wgms_scorecard(v; min_n=100)) == 0
     end
 
     @testset "scorecard weights regions equally" begin
@@ -378,7 +378,7 @@ spec(id, region, area, source, provenance; years=2000:2001, elevations=(2000, 21
         grads = DataFrame(label="x", source=:point, region=[1, 3], season=:winter, median_difference=[0.1, 0.3])
         ratio = DataFrame(label="x", source=:point, region=[1, 3], obs_ratio=[1.0, 2.0], model_ratio=[exp(0.5), 2.0])
         v = (; summary, anomaly, gradient_summary=grads, ratio)
-        c = GGA.wgms_scorecard(v)                           # region 2 has 10 < 30 records
+        c = GlacierHydrology.wgms_scorecard(v)                           # region 2 has 10 < 30 records
         @test c.n_regions == [2] && c.n == [140]
         @test c.n_glaciers == [8] && c.n_glacier_years == [70] && c.restriction == ["all"]
         @test c.mean_abs_bias[1] ≈ 0.2 && c.mean_rmse[1] ≈ 0.4 && c.median_r[1] ≈ 0.6
@@ -387,20 +387,20 @@ spec(id, region, area, source, provenance; years=2000:2001, elevations=(2000, 21
 
         grads.median_abs_difference = [0.1, 0.5]
         grads.obs_median = [0.4, 0.2]; grads.model_median = [0.1, 0.2]
-        c = GGA.wgms_scorecard((; summary, anomaly, gradient_summary=grads, ratio))
+        c = GlacierHydrology.wgms_scorecard((; summary, anomaly, gradient_summary=grads, ratio))
         @test c.median_abs_gradient_difference[1] ≈ 0.3 && c.median_gradient_ratio[1] ≈ (0.25 + 1) / 2
 
         # Three configurations: y is best on bias and gradient, z on anomaly r.
         cards = DataFrame(label=["x", "y", "z"], source=:point, season=:winter,
                           mean_abs_bias=[0.5, 0.1, 0.5], median_abs_gradient_difference=[0.3, 0.1, NaN],
                           median_r_anomaly=[0.4, 0.5, 0.9])
-        rk = GGA.wgms_rank(cards)
+        rk = GlacierHydrology.wgms_rank(cards)
         @test rk.label == ["y", "z", "x"]
         @test rk.rank_mean_abs_bias == [1, 2, 2]                 # ties share the lower rank
         @test rk.rank_median_abs_gradient_difference == [1, 3, 2] # NaN ranks last
         @test rk.rank_median_r_anomaly == [2, 1, 3]
         @test rk.mean_rank ≈ [4 / 3, 2, 7 / 3]
-        @test_throws "must be :lower or :higher" GGA.wgms_rank(cards; metrics=(mean_abs_bias=:best,))
+        @test_throws "must be :lower or :higher" GlacierHydrology.wgms_rank(cards; metrics=(mean_abs_bias=:best,))
     end
 
     @testset "record covariates: area, provenance and stake span" begin
@@ -414,10 +414,10 @@ spec(id, region, area, source, provenance; years=2000:2001, elevations=(2000, 21
                point_row(2, 2010, 8, "2009-10-15", 0, "2010-05-20", 0, 64.81, -18.91, 1050, 12.0, "", "", "winter")] # fails QC
         mb = [mb_row(1, 2010, 1_000_000), mb_row(1, 2011, 3_000_000), mb_row(1, 2012, 2_000_000),
               mb_row(2, 2010, "")]
-        w = GGA.read_wgms(write_fog(joinpath(mktempdir(), "data"); mb, points=pts,
+        w = GlacierHydrology.read_wgms(write_fog(joinpath(mktempdir(), "data"); mb, points=pts,
                                     bands=[band_row(1, 2010, 2000, 2100), band_row(1, 2010, 2900, 3000)]))
         @test isequal(w.glaciers.area_km2, [2.0, missing])            # median of 1, 3 and 2 km²
-        @test sort(GGA.wgms_seasonal_points(w).records.id) == [1, 2, 7]
+        @test sort(GlacierHydrology.wgms_seasonal_points(w).records.id) == [1, 2, 7]
 
         rec(source, g, y, season, lo, hi; id="$source/$g/$y/$season/$lo") =
             (; source, record_id=id, glacier_id=g, year=y, season, z_lo=Float64(lo), z_hi=Float64(hi))
@@ -435,7 +435,7 @@ spec(id, region, area, source, provenance; years=2000:2001, elevations=(2000, 21
             rec(:point, 1, 2010, :winter, 2400, 2400; id="1"),
             rec(:point, 1, 2010, :summer, 2500, 2500; id="7"),
             rec(:point, 2, 2010, :winter, 1050, 1050; id="8")])
-        c = GGA.wgms_record_covariates(w, records)
+        c = GlacierHydrology.wgms_record_covariates(w, records)
         @test c.provenance == [:band_in_stake_range, :band_beyond_stakes, :band_in_stake_range,
                                :band_beyond_stakes, :band_in_stake_range, :band_beyond_stakes,
                                :band_no_stakes, :band_in_stake_range, :stake, :stake, :stake]
@@ -447,35 +447,35 @@ spec(id, region, area, source, provenance; years=2000:2001, elevations=(2000, 21
         @test names(c)[end-2:end] == ["glacier_area_km2", "provenance", "stake_span_fraction"]
 
         # Counting only the stakes that pass quality control narrows the range.
-        q = GGA.wgms_record_covariates(w, records[1:8, :]; stakes=:qc)
+        q = GlacierHydrology.wgms_record_covariates(w, records[1:8, :]; stakes=:qc)
         @test q.provenance[[3, 8]] == [:band_beyond_stakes, :band_no_stakes]
-        qp = GGA.wgms_record_covariates(w, records[[9], :]; stakes=:qc)
+        qp = GlacierHydrology.wgms_record_covariates(w, records[[9], :]; stakes=:qc)
         @test qp.stake_span_fraction ≈ [0.2]
         # Tolerance 0 narrows "in range" to the stakes' own extent.
-        t0 = GGA.wgms_record_covariates(w, records[1:4, :]; tolerance_m=0)
+        t0 = GlacierHydrology.wgms_record_covariates(w, records[1:4, :]; tolerance_m=0)
         @test t0.provenance == [:band_beyond_stakes, :band_beyond_stakes, :band_beyond_stakes, :band_beyond_stakes]
-        @test GGA.wgms_record_covariates(w, records[1:0, :]).provenance == Symbol[]
+        @test GlacierHydrology.wgms_record_covariates(w, records[1:0, :]).provenance == Symbol[]
 
-        @test_throws "stakes must be :database or :qc, got :all" GGA.wgms_record_covariates(w, records; stakes=:all)
-        @test_throws "tolerance_m must be non-negative" GGA.wgms_record_covariates(w, records; tolerance_m=-1)
-        @test_throws "records lack column(s) year" GGA.wgms_record_covariates(w, select(records, Not(:year)))
-        @test_throws "source must be :point or :band, got :pit" GGA.wgms_record_covariates(
+        @test_throws "stakes must be :database or :qc, got :all" GlacierHydrology.wgms_record_covariates(w, records; stakes=:all)
+        @test_throws "tolerance_m must be non-negative" GlacierHydrology.wgms_record_covariates(w, records; tolerance_m=-1)
+        @test_throws "records lack column(s) year" GlacierHydrology.wgms_record_covariates(w, select(records, Not(:year)))
+        @test_throws "source must be :point or :band, got :pit" GlacierHydrology.wgms_record_covariates(
             w, transform(records[1:1, :], :source => (x -> [:pit]) => :source))
-        @test_throws "glacier 9 is not in wgms.glaciers" GGA.wgms_record_covariates(
+        @test_throws "glacier 9 is not in wgms.glaciers" GlacierHydrology.wgms_record_covariates(
             w, transform(records[1:1, :], :glacier_id => (x -> [9]) => :glacier_id))
-        @test_throws "point record 8 has no stake under stakes=:qc" GGA.wgms_record_covariates(
+        @test_throws "point record 8 has no stake under stakes=:qc" GlacierHydrology.wgms_record_covariates(
             w, records[[11], :]; stakes=:qc)
-        @test_throws "no area_km2 column" GGA.wgms_record_covariates(
+        @test_throws "no area_km2 column" GlacierHydrology.wgms_record_covariates(
             (; glaciers=select(w.glaciers, Not(:area_km2)), points=w.points, bands=w.bands), records)
     end
 
     @testset "size classes" begin
-        @test GGA.wgms_size_class(0.5) == "<1" && GGA.wgms_size_class(1) == "1-10"
-        @test GGA.wgms_size_class(9.99) == "1-10" && GGA.wgms_size_class(10) == ">=10"
-        @test GGA.wgms_size_class(missing) == "missing"
-        @test GGA.wgms_size_class(3; edges_km2=(2,)) == ">=2" && GGA.wgms_size_class(1; edges_km2=(2,)) == "<2"
-        @test GGA.wgms_size_class(30; edges_km2=(1, 5, 20)) == ">=20" && GGA.wgms_size_class(7; edges_km2=(1, 5, 20)) == "5-20"
-        @test_throws "strictly ascending" GGA.wgms_size_class(1; edges_km2=(5, 1))
+        @test GlacierHydrology.wgms_size_class(0.5) == "<1" && GlacierHydrology.wgms_size_class(1) == "1-10"
+        @test GlacierHydrology.wgms_size_class(9.99) == "1-10" && GlacierHydrology.wgms_size_class(10) == ">=10"
+        @test GlacierHydrology.wgms_size_class(missing) == "missing"
+        @test GlacierHydrology.wgms_size_class(3; edges_km2=(2,)) == ">=2" && GlacierHydrology.wgms_size_class(1; edges_km2=(2,)) == "<2"
+        @test GlacierHydrology.wgms_size_class(30; edges_km2=(1, 5, 20)) == ">=20" && GlacierHydrology.wgms_size_class(7; edges_km2=(1, 5, 20)) == "5-20"
+        @test_throws "strictly ascending" GlacierHydrology.wgms_size_class(1; edges_km2=(5, 1))
     end
 
     @testset "strata report counts and metrics on every row" begin
@@ -484,8 +484,8 @@ spec(id, region, area, source, provenance; years=2000:2001, elevations=(2000, 21
                  spec(3, 1, 20.0, :band, :band_in_stake_range; err_ref=0.1),
                  spec(4, 2, missing, :band, :band_no_stakes; err_ref=0.3),
                  spec(5, 2, 2.0, :band, :band_beyond_stakes; err_ref=-0.4)]
-        v = GGA._wgms_rescore(synthetic_matched("m", specs, :err_ref))
-        s = GGA.wgms_scorecard_strata(v; min_n=1)
+        v = GlacierHydrology._wgms_rescore(synthetic_matched("m", specs, :err_ref))
+        s = GlacierHydrology.wgms_scorecard_strata(v; min_n=1)
         row(by, level, source) = only(eachrow(s[(s.stratum_by .=== by) .& (s.stratum .== level) .& (s.source .=== source), :]))
         counts(r) = (r.n, r.n_glaciers, r.n_glacier_years)
         @test counts(row(:all, "all", :point)) == (8, 2, 4) && counts(row(:all, "all", :band)) == (12, 3, 6)
@@ -507,23 +507,23 @@ spec(id, region, area, source, provenance; years=2000:2001, elevations=(2000, 21
         @test row(:size_class, "<1", :point).mean_abs_bias ≈ 0.5
 
         # Regions with fewer than min_n records in a stratum are counted but not scored.
-        s5 = GGA.wgms_scorecard_strata(v; min_n=5, by=(:all, :size_class))
+        s5 = GlacierHydrology.wgms_scorecard_strata(v; min_n=5, by=(:all, :size_class))
         small = only(eachrow(s5[(s5.stratum .== "<1") .& (s5.source .=== :point), :]))
         @test small.n == 4 && small.n_scored == 0 && small.n_regions == 0 && isnan(small.mean_abs_bias)
         big = only(eachrow(s5[(s5.stratum .== "1-10") .& (s5.source .=== :band), :]))
         @test big.n == 4 && big.n_scored == 0
-        @test_throws "unknown stratification :shape" GGA.wgms_scorecard_strata(v; by=(:shape,))
-        @test_throws "lacks column(s) glacier_area_km2" GGA.wgms_scorecard_strata(
+        @test_throws "unknown stratification :shape" GlacierHydrology.wgms_scorecard_strata(v; by=(:shape,))
+        @test_throws "lacks column(s) glacier_area_km2" GlacierHydrology.wgms_scorecard_strata(
             (; matched=select(v.matched, Not(:glacier_area_km2))))
 
         # Scorecard restricted to anchored records: only the stake and in-range classes remain.
-        anchored = GGA.wgms_scorecard(v; min_n=1, provenance=GGA.WGMS_ANCHORED_PROVENANCE)
+        anchored = GlacierHydrology.wgms_scorecard(v; min_n=1, provenance=GlacierHydrology.WGMS_ANCHORED_PROVENANCE)
         @test anchored.restriction == fill("stake+band_in_stake_range", 2)
         @test sort(anchored.n) == [4, 8]
         ab = anchored[anchored.source .=== :band, :]
         @test ab.n == [4] && ab.mean_abs_bias ≈ [0.1]
-        @test_throws "unknown provenance class(es) :nonsense" GGA.wgms_scorecard(v; provenance=(:nonsense,))
-        @test_throws "v.matched has no provenance column" GGA.wgms_scorecard((; summary=v.summary); provenance=(:stake,))
+        @test_throws "unknown provenance class(es) :nonsense" GlacierHydrology.wgms_scorecard(v; provenance=(:nonsense,))
+        @test_throws "v.matched has no provenance column" GlacierHydrology.wgms_scorecard((; summary=v.summary); provenance=(:stake,))
     end
 
     @testset "scatter between glaciers at matched elevations" begin
@@ -534,14 +534,14 @@ spec(id, region, area, source, provenance; years=2000:2001, elevations=(2000, 21
         append!(rows, [(; source=:band, region=1, season=:winter, glacier_id=g, z_lo=2300.0, z_hi=2400.0, obs=o)
                        for (g, o) in ((1, 0.0), (2, 2.0), (3, 6.0))])
         push!(rows, (; source=:band, region=1, season=:winter, glacier_id=9, z_lo=3000.0, z_hi=3000.0, obs=50.0))
-        sc = GGA.wgms_glacier_scatter(DataFrame(rows))
+        sc = GlacierHydrology.wgms_glacier_scatter(DataFrame(rows))
         # Bin 1: sum of squares of [0, 1, 2, 3] about 1.5 is 5 with 3 df; bin 2: [0, 2, 6] about 8/3 is 18.67
         # with 2 df; the lone glacier adds none.
         @test nrow(sc) == 1 && sc.n_glaciers == [5] && sc.n_dof == [5]
         @test sc.glacier_scatter[1] ≈ sqrt((5 + 56 / 3) / 5)
-        lone = GGA.wgms_glacier_scatter(DataFrame(rows[end:end]))
+        lone = GlacierHydrology.wgms_glacier_scatter(DataFrame(rows[end:end]))
         @test lone.n_dof == [0] && isnan(lone.glacier_scatter[1])
-        @test_throws "elevation_bin_m must be positive" GGA.wgms_glacier_scatter(DataFrame(rows); elevation_bin_m=0)
+        @test_throws "elevation_bin_m must be positive" GlacierHydrology.wgms_glacier_scatter(DataFrame(rows); elevation_bin_m=0)
     end
 
     @testset "glacier-block bootstrap of a member difference" begin
@@ -551,9 +551,9 @@ spec(id, region, area, source, provenance; years=2000:2001, elevations=(2000, 21
                    err_ref=0.5, err_member=0.0)
         smalls = [spec(1 + g, 1, 2.0, :band, :band_no_stakes; years=2000:2001, elevations=(2000,),
                        err_ref=0.0, err_member=0.5) for g in 1:5]
-        vs = Dict(l => GGA._wgms_rescore(synthetic_matched(l, [big; smalls], e))
+        vs = Dict(l => GlacierHydrology._wgms_rescore(synthetic_matched(l, [big; smalls], e))
                   for (l, e) in (("ref", :err_ref), ("member", :err_member)))
-        d = GGA.wgms_member_difference(vs["ref"], vs["member"]; by=(:all,), representativeness_floor=0)
+        d = GlacierHydrology.wgms_member_difference(vs["ref"], vs["member"]; by=(:all,), representativeness_floor=0)
         ab = only(eachrow(d[d.metric .=== :abs_bias, :]))
         @test (ab.n, ab.n_glaciers, ab.n_regions) == (310, 6, 1) && ab.label_ref == "ref" && ab.label_member == "member"
         @test ab.ref ≈ 150 / 310 && ab.member ≈ 5 / 310 && ab.difference ≈ (5 - 150) / 310
@@ -569,7 +569,7 @@ spec(id, region, area, source, provenance; years=2000:2001, elevations=(2000, 21
         @test quantile(record_level, 0.975) < 0
 
         # The default seed makes a call reproducible.
-        again = GGA.wgms_member_difference(vs["ref"], vs["member"]; by=(:all,), representativeness_floor=0)
+        again = GlacierHydrology.wgms_member_difference(vs["ref"], vs["member"]; by=(:all,), representativeness_floor=0)
         @test isequal(d, again)
     end
 
@@ -581,9 +581,9 @@ spec(id, region, area, source, provenance; years=2000:2001, elevations=(2000, 21
                            offset=off1[g], err_ref=0.4 + 0.02g, err_member=0.1 + 0.01g) for g in 1:5],
                      [spec(g, 2, 3.0, :band, :band_in_stake_range; years=2000:2002, elevations=(2000, 2100),
                            offset=off2[g-5], err_ref=0.4 + 0.02g, err_member=0.1 + 0.01g) for g in 6:10])
-        ref = GGA._wgms_rescore(synthetic_matched("ref", specs, :err_ref))
-        mem = GGA._wgms_rescore(synthetic_matched("mem", specs, :err_member))
-        diff(; kw...) = GGA.wgms_member_difference(ref, mem; by=(:all, :region), kw...)
+        ref = GlacierHydrology._wgms_rescore(synthetic_matched("ref", specs, :err_ref))
+        mem = GlacierHydrology._wgms_rescore(synthetic_matched("mem", specs, :err_member))
+        diff(; kw...) = GlacierHydrology.wgms_member_difference(ref, mem; by=(:all, :region), kw...)
         pick(d, by, level, metric=:abs_bias) = only(eachrow(d[(d.stratum_by .=== by) .& (d.stratum .== level) .& (d.metric .=== metric), :]))
 
         # |bias| is the mean error: region 1 holds g = 1:5, region 2 g = 6:10.
@@ -623,21 +623,21 @@ spec(id, region, area, source, provenance; years=2000:2001, elevations=(2000, 21
 
         # Members are paired on the records both matched (region 2 keeps 24 records, so min_n = 24).
         trimmed = (; matched=mem.matched[mem.matched.glacier_id .!= 10, :])
-        t = GGA.wgms_member_difference(ref, trimmed; by=(:all,), representativeness_floor=0, min_n=24)
+        t = GlacierHydrology.wgms_member_difference(ref, trimmed; by=(:all,), representativeness_floor=0, min_n=24)
         @test all(t.n .== 54) && all(t.n_glaciers .== 9)
 
-        @test_throws "leaves fewer than one replicate" GGA.wgms_member_difference(ref, mem; n_boot=39)
-        @test_throws "level must be in (0, 1)" GGA.wgms_member_difference(ref, mem; level=1.0)
-        @test_throws "representativeness_floor must be" GGA.wgms_member_difference(ref, mem; representativeness_floor=-1)
-        @test_throws "representativeness_floor must be" GGA.wgms_member_difference(ref, mem; representativeness_floor=:median)
-        @test_throws "unknown stratification :shape" GGA.wgms_member_difference(ref, mem; by=(:shape,))
+        @test_throws "leaves fewer than one replicate" GlacierHydrology.wgms_member_difference(ref, mem; n_boot=39)
+        @test_throws "level must be in (0, 1)" GlacierHydrology.wgms_member_difference(ref, mem; level=1.0)
+        @test_throws "representativeness_floor must be" GlacierHydrology.wgms_member_difference(ref, mem; representativeness_floor=-1)
+        @test_throws "representativeness_floor must be" GlacierHydrology.wgms_member_difference(ref, mem; representativeness_floor=:median)
+        @test_throws "unknown stratification :shape" GlacierHydrology.wgms_member_difference(ref, mem; by=(:shape,))
         shifted = (; matched=transform(mem.matched, :obs => (x -> x .+ 0.1) => :obs))
-        @test_throws "disagree on the observed balance" GGA.wgms_member_difference(ref, shifted)
+        @test_throws "disagree on the observed balance" GlacierHydrology.wgms_member_difference(ref, shifted)
         disjoint = (; matched=transform(mem.matched, :record_id => (x -> "z" .* x) => :record_id))
-        @test_throws "share no matched record" GGA.wgms_member_difference(ref, disjoint)
+        @test_throws "share no matched record" GlacierHydrology.wgms_member_difference(ref, disjoint)
         dup = (; matched=vcat(mem.matched, mem.matched[1:1, :]))
-        @test_throws "v_member.matched holds duplicate" GGA.wgms_member_difference(ref, dup)
-        @test_throws "v_ref.matched lacks column(s) provenance" GGA.wgms_member_difference(
+        @test_throws "v_member.matched holds duplicate" GlacierHydrology.wgms_member_difference(ref, dup)
+        @test_throws "v_ref.matched lacks column(s) provenance" GlacierHydrology.wgms_member_difference(
             (; matched=select(ref.matched, Not(:provenance))), mem)
     end
 
@@ -647,10 +647,10 @@ spec(id, region, area, source, provenance; years=2000:2001, elevations=(2000, 21
                          spec(2, 1, 3.0, :band, :band_no_stakes; err_ref=ex[2], err_member=ey[2]),
                          spec(3, 1, 3.0, :point, :stake; err_ref=ex[3], err_member=ey[3])]
         sp = specs((0.1, 0.5, 0.1), (0.3, 0.2, 0.3))
-        X = GGA._wgms_rescore(synthetic_matched("X", sp, :err_ref))
-        Y = GGA._wgms_rescore(synthetic_matched("Y", sp, :err_member))
+        X = GlacierHydrology._wgms_rescore(synthetic_matched("X", sp, :err_ref))
+        Y = GlacierHydrology._wgms_rescore(synthetic_matched("Y", sp, :err_member))
         metrics = (mean_abs_bias=:lower,)
-        r = GGA.wgms_rank_restricted([X, Y]; min_n=1, metrics)
+        r = GlacierHydrology.wgms_rank_restricted([X, Y]; min_n=1, metrics)
         band = r[r.source .=== :band, :]
         pooled, anchored = band[band.restriction .== "all", :], band[band.restriction .== "stake+band_in_stake_range", :]
         @test pooled.label == ["Y", "X"] && pooled.rank_mean_abs_bias == [1, 2]     # X: (0.1 + 0.5) / 2 = 0.3; Y: 0.25
@@ -662,21 +662,21 @@ spec(id, region, area, source, provenance; years=2000:2001, elevations=(2000, 21
 
         # A configuration that matched fewer records is compared on the common ones.
         Ytrim = (; matched=Y.matched[Y.matched.glacier_id .!= 2, :])
-        c = GGA.wgms_rank_restricted([X, Ytrim]; min_n=1, metrics)
+        c = GlacierHydrology.wgms_rank_restricted([X, Ytrim]; min_n=1, metrics)
         cb = c[(c.source .=== :band) .& (c.restriction .== "all"), :]
         @test cb.n == [4, 4] && cb.label == ["X", "Y"]
 
         # Cards of several restrictions rank within each restriction.
         cards = DataFrame(label=["a", "b", "a", "b"], restriction=["all", "all", "r", "r"], source=:band,
                           season=:winter, mean_abs_bias=[0.1, 0.2, 0.4, 0.3])
-        rk = GGA.wgms_rank(cards; metrics)
+        rk = GlacierHydrology.wgms_rank(cards; metrics)
         @test rk.label == ["a", "b", "b", "a"] && rk.restriction == ["all", "all", "r", "r"]
         @test rk.rank_mean_abs_bias == [1, 2, 1, 2]
 
-        @test_throws "needs at least two configurations" GGA.wgms_rank_restricted([X])
-        @test_throws "labels are not distinct" GGA.wgms_rank_restricted([X, X])
-        @test_throws "share no matched record" GGA.wgms_rank_restricted(
+        @test_throws "needs at least two configurations" GlacierHydrology.wgms_rank_restricted([X])
+        @test_throws "labels are not distinct" GlacierHydrology.wgms_rank_restricted([X, X])
+        @test_throws "share no matched record" GlacierHydrology.wgms_rank_restricted(
             [X, (; matched=transform(Y.matched, :record_id => (x -> "z" .* x) => :record_id))])
-        @test_throws "unknown provenance class(es) :nope" GGA.wgms_rank_restricted([X, Y]; restrictions=((:nope,),))
+        @test_throws "unknown provenance class(es) :nope" GlacierHydrology.wgms_rank_restricted([X, Y]; restrictions=((:nope,),))
     end
 end

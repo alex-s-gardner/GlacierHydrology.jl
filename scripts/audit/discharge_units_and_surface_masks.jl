@@ -30,15 +30,15 @@
 # The discharge file is whatever `global_discharge_filled` last wrote to
 # `pathlocal[:discharge_global]`, so the values move when it is regenerated.
 
-import GlobalGlacierAnalysis as GGA
+import GlacierHydrology
 using DataFrames
 using DimensionalData
 using FileIO
 using Printf
 using Statistics
 
-discharge_file = GGA.pathlocal[:discharge_global]
-δice = GGA.δice
+discharge_file = GlacierHydrology.pathlocal[:discharge_global]
+δice = GlacierHydrology.δice
 volume2mass = δice / 1000
 
 # --- 1 and 2: discharge units -------------------------------------------------------------------
@@ -60,9 +60,9 @@ println("Antarctic discharge (south of 60°S, $(count(antarctic)) glaciers)")
 discharge_fixed = copy(discharge)
 discharge_fixed[antarctic, :discharge_gtyr] .*= volume2mass
 
-dgeotile = dims(GGA._geotile_area_km2(; surface_mask="glacier", geotile_width=2), :geotile)
-rate_old = GGA.discharge2geotile(discharge, dgeotile; mass2volume=true)[:discharge]
-rate_new = GGA.discharge2geotile(discharge_fixed, dgeotile; mass2volume=true)[:discharge]
+dgeotile = dims(GlacierHydrology._geotile_area_km2(; surface_mask="glacier", geotile_width=2), :geotile)
+rate_old = GlacierHydrology.discharge2geotile(discharge, dgeotile; mass2volume=true)[:discharge]
+rate_new = GlacierHydrology.discharge2geotile(discharge_fixed, dgeotile; mass2volume=true)[:discharge]
 
 # The column per year of elapsed time. Before the fixes the km³ rate was divided by volume2mass a
 # second time, on top of the Antarctic rows already being km³ stored as Gt.
@@ -75,8 +75,8 @@ println("Geotile discharge column, sum over geotiles, per year (km³ i.e./yr)")
 @printf("  corrected:                   %7.1f\n", column_new)
 
 # --- 3: RGI6 vs RGI7 area per geotile -----------------------------------------------------------
-area6 = dropdims(sum(GGA._geotile_area_km2(; surface_mask="glacier", geotile_width=2); dims=:height); dims=:height)
-area7 = dropdims(sum(GGA._geotile_area_km2(; surface_mask="glacier_rgi7", geotile_width=2); dims=:height); dims=:height)
+area6 = dropdims(sum(GlacierHydrology._geotile_area_km2(; surface_mask="glacier", geotile_width=2); dims=:height); dims=:height)
+area7 = dropdims(sum(GlacierHydrology._geotile_area_km2(; surface_mask="glacier_rgi7", geotile_width=2); dims=:height); dims=:height)
 
 ids = intersect(val(dims(area6, :geotile)), val(dims(area7, :geotile)))
 a6 = [area6[geotile=At(id)] for id in ids]

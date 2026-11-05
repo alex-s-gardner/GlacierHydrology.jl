@@ -1,6 +1,6 @@
 using Test
-using GlobalGlacierAnalysis
-import GlobalGlacierAnalysis as GGA
+using GlacierHydrology
+import GlacierHydrology
 using DimensionalData
 import DimensionalData as DD
 using Dates
@@ -28,10 +28,10 @@ using Dates
             # Write. `dimstack2netcdf` forwards its kwargs straight to NCDatasets.defVar, so only
             # defVar options (deflatelevel, chunksizes, ...) belong here -- global attributes are
             # taken from the DimStack's own metadata instead.
-            GGA.dimstack2netcdf(ds, filepath)
+            GlacierHydrology.dimstack2netcdf(ds, filepath)
 
             # Read
-            ds_loaded = GGA.netcdf2dimstack(filepath)
+            ds_loaded = GlacierHydrology.netcdf2dimstack(filepath)
 
             # Verify dimensions. Query by name, not by dimension type: the round trip rebuilds
             # dimensions generically from their NetCDF names, so a `Ti` written out comes back as
@@ -68,13 +68,13 @@ using Dates
             # nc.attrib in its final step.
             ds = DimStack((testvar=da,);
                 metadata=Dict("title" => "Test Dataset", "institution" => "Test Lab"))
-            GGA.dimstack2netcdf(ds, filepath)
+            GlacierHydrology.dimstack2netcdf(ds, filepath)
 
             # Verify file was created
             @test isfile(filepath)
 
             # Read back
-            ds_loaded = GGA.netcdf2dimstack(filepath)
+            ds_loaded = GlacierHydrology.netcdf2dimstack(filepath)
 
             # Verify data
             loaded_key = first(keys(ds_loaded))
@@ -93,10 +93,10 @@ using Dates
             ds = DimStack((datavar=da,))
 
             # Write
-            GGA.dimstack2netcdf(ds, filepath)
+            GlacierHydrology.dimstack2netcdf(ds, filepath)
 
             # Read
-            ds_loaded = GGA.netcdf2dimstack(filepath)
+            ds_loaded = GlacierHydrology.netcdf2dimstack(filepath)
 
             # Verify NaN handling
             loaded_key = first(keys(ds_loaded))

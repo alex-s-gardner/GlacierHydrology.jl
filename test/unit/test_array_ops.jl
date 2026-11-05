@@ -1,6 +1,6 @@
 using Test
-using GlobalGlacierAnalysis
-import GlobalGlacierAnalysis as GGA
+using GlacierHydrology
+import GlacierHydrology
 import GlacierVolumeChange as GVC
 
 @testset "Array Operations" begin
@@ -9,22 +9,22 @@ import GlacierVolumeChange as GVC
     @testset "validrange 1D" begin
         # Standard case with valid range
         v = [false, true, true, false, true, false]
-        range_result = GGA.validrange(v)
+        range_result = GlacierHydrology.validrange(v)
         @test length(range_result) == 1
         @test range_result[1] == 2:5  # first true at 2, last at 5
 
         # All false -> empty range, not an error
-        range_empty = GGA.validrange(falses(10))
+        range_empty = GlacierHydrology.validrange(falses(10))
         @test isempty(range_empty[1])
 
         # All true
-        @test GGA.validrange(trues(10))[1] == 1:10
+        @test GlacierHydrology.validrange(trues(10))[1] == 1:10
 
         # Single true at start
-        @test GGA.validrange([true, false, false])[1] == 1:1
+        @test GlacierHydrology.validrange([true, false, false])[1] == 1:1
 
         # Single true at end
-        @test GGA.validrange([false, false, true])[1] == 3:3
+        @test GlacierHydrology.validrange([false, false, true])[1] == 3:3
     end
 
     @testset "validrange 2D" begin
@@ -32,7 +32,7 @@ import GlacierVolumeChange as GVC
         mat = falses(10, 10)
         mat[3:7, 4:8] .= true
 
-        range_2d = GGA.validrange(mat)
+        range_2d = GlacierHydrology.validrange(mat)
         @test length(range_2d) == 2
         @test range_2d[1] == 3:7  # rows
         @test range_2d[2] == 4:8  # columns
@@ -42,7 +42,7 @@ import GlacierVolumeChange as GVC
         @test sum(mat[range_2d...]) == sum(mat)
 
         # all false in 2D
-        empty_2d = GGA.validrange(falses(4, 4))
+        empty_2d = GlacierHydrology.validrange(falses(4, 4))
         @test isempty(empty_2d[1]) && isempty(empty_2d[2])
     end
 

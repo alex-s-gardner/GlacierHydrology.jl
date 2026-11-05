@@ -51,7 +51,7 @@ end
     gemb_physics_member_parts(member) -> (; tile_member, precipitation_gradient)
 
 The GEMB_GlacierSims tile-sweep member a GEMB physics member reads (every token but a trailing `g`
-token), and the precipitation gradient [% per 100 m] applied to it in GGA (`0.0` without a `g` token).
+token), and the precipitation gradient [% per 100 m] applied to it here (`0.0` without a `g` token).
 See [`gemb_band_pscale_multipliers`](@ref).
 """
 function gemb_physics_member_parts(member)
