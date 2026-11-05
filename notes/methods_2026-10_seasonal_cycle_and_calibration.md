@@ -186,3 +186,11 @@ the combined effect of items 2–4. Trends 2000-03 to 2024-12, reference member 
 - `runs2rgi` leaves out geotiles with no altimetry at any date (sub-km² ice fragments GEMB covers but the
   binning drops; five, 0.18 km² in total, in the RGI6-mask members); they previously made RGI 8, 10, 11,
   19 and the global sum NaN in those members. It errors if such geotiles hold ≥ 1 km² of glacier.
+
+## 8. GEMB absorbs all downward longwave (known, not fixed)
+
+GEMB adds the whole downward longwave flux to the surface and scales only the emitted flux by the
+emissivity, so it absorbs `(1−ε)·LW_down` too much (7–9 W m⁻² at ε = 0.97). In one maritime tile the
+corrected absorption reduces melt by 10 % and is equivalent to a 0.23 K air-temperature offset, which
+the fitted ΔT absorbs. All GEMB results here use the uncorrected behavior. Details, evidence and the
+fix are in `known_issue_gemb_longwave_absorption.md`.
