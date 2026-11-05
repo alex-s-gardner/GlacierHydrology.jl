@@ -7,6 +7,7 @@ const seasonality_weight = 85/100
 # Strength of the forcing-prior penalty (`origin_penalty_mode = :prior`): the cost is multiplied by
 # 1 + wd × d, d the Mahalanobis distance from `gemb_forcing_prior`. 0.35 is the largest value within 1% of the
 # best held-out skill in temporal cross-validation; see notes/methods_2026-10_seasonal_cycle_and_calibration.md.
+# Derived, like `gemb_forcing_prior`, from the GEMB run `gemb_forcing_prior_run_id` fits.
 const distance_from_origin_penalty = 35 / 100
 # Only used by the `:legacy` penalty mode.
 const ΔT_to_pscale_weight = 50/100
@@ -16,7 +17,39 @@ const ΔT_to_pscale_weight = 50/100
 # log pscale < 0.15 and of ΔT < 0.5 K within 5% of the minimum cost; 88% of ice area) for the reference
 # ensemble member, fill set 6, GEMB run 8. See notes/methods_2026-10_seasonal_cycle_and_calibration.md.
 const gemb_forcing_prior = (pscale=1.60, log_pscale_sd=0.45, ΔT=2.20, ΔT_sd=1.65, corr=0.50)
+# The GEMB run `gemb_forcing_prior` and `distance_from_origin_penalty` were derived from. Both describe
+# that run's forcing bias, so they hold for no other run: `gemb_calibration` throws when it would apply
+# them to a different one. Re-derive both from the new run's unpenalized fits
+# (`distance_from_origin_penalty = 0`), then update all three together.
+const gemb_forcing_prior_run_id = 8
 const ocean_area_km2 = 362.5 * 1E6
+
+"""
+    reference_surface_mask() -> String
+
+Glacier inventory (`"glacier"` for RGI 6.0, `"glacier_rgi7"` for RGI 7.0) of the reference ensemble
+member, `GVC.reference_member()`. The glacier-level products spread that member's geotile values over
+this inventory's glaciers.
+"""
+reference_surface_mask() = binned_filled_fileparts(GVC.reference_member()).surface_mask
+# The GEMB physics member (GEMB_GlacierSims `physics_member`) the reported fluxes are calibrated
+# against: Flanner & Zender (2006) grain growth with 350 kg m-3 fresh snow, the fitted band decoupling
+# factor, the regional background impurity table and band wind × 2 (tile member `B-kfit-table-w2`), with
+# a band precipitation gradient of 2.5 % per 100 m applied at calibration. The other members are
+# sensitivities to it. The gradient is defined for the pilot sweep (GEMB run 10) only.
+const gemb_reference_physics_member = "B-kfit-table-w2-g2.5"
+
+# The forcing grid GEMB run 10 (the pilot sweep) is calibrated on: 7 temperature offsets [K] by 9
+# precipitation scalings. Pilot tiles run on the dense grid carry these nodes among others and are read
+# at these alone, so every pilot tile enters the ensemble on the same nodes.
+const gemb_pilot_forcing_grid = (; pscale=[0.25, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0],
+                                   ΔT=[-3.0, -1.5, 0.0, 1.5, 3.0, 4.5, 6.0])
+
+# The geotile-mean pscale nodes a precipitation-gradient member of run 10 is calibrated on. Each band is
+# read at pscale · m_b, which must stay on the tiles' 0.25 … 6 axis; at 2.5 % per 100 m the pilot tiles'
+# bands do so for geotile-mean pscale 0.75 … 3 (the tallest, N28_E086 and N60_W140, bound it).
+const gemb_pilot_gradient_forcing_grid = (; pscale=[0.75, 1.0, 1.5, 2.0, 3.0],
+                                            ΔT=gemb_pilot_forcing_grid.ΔT)
 
 # An alternative binning must be a distinctly named function, not a second `project_mscale_bins()`
 # method: a duplicate empty signature is silently shadowed, and method overwriting makes the module
@@ -48,12 +81,22 @@ function project_mscale_bins()
 end
 
 """
-    gemb_info(; gemb_run_id=4)
+    gemb_info(; gemb_run_id=9, physics_member=nothing)
 
 Get GEMB (Glacier Energy and Mass Balance) model configuration for a specific run.
 
 # Arguments
-- `gemb_run_id::Int`: GEMB run identifier (1-4, default: 4)
+- `gemb_run_id::Int`: GEMB run identifier (1-10, default: 9). Runs 1-6 are point `.mat` output; runs
+  7-10 are `GEMB_GlacierSims` tile NetCDF and carry a `tile_dir` instead of `gemb_folder`.
+- `physics_member`: the GEMB_GlacierSims physics member (e.g. `"B-kfit-table"`, see
+  [`gemb_reference_physics_member`](@ref)). Runs 9 and 10 hold one tile sweep per member, under
+  `<tile_dir>/<physics_member>`, with a combined file of its own, and require it; runs 1-8 have no
+  members and refuse it. The returned tuple carries it as `physics_member`. A run-10 member with a
+  precipitation gradient (`"<tile member>-g<g>"`, [`gemb_physics_member_parts`](@ref)) reads its tile
+  member's directory, has a combined file of its own and the forcing grid
+  [`gemb_pilot_gradient_forcing_grid`](@ref); run 9 refuses one.
+- The tile runs' tuples carry `forcing_grid`: the `(; pscale, ΔT)` nodes the ensemble is read on, or
+  `nothing` for the tiles' own grid.
 
 # Returns
 - Named tuple containing GEMB configuration parameters:
@@ -68,11 +111,13 @@ Get GEMB (Glacier Energy and Mass Balance) model configuration for a specific ru
 
 # Examples
 ```julia
-julia> gembinfo = gemb_info(; gemb_run_id=4)
+julia> gembinfo = gemb_info(; gemb_run_id=9)
 julia> dpscale = gembinfo.precipitation_scale
 ```
 """
-function gemb_info(; gemb_run_id = 4)
+function gemb_info(; gemb_run_id = 9, physics_member = nothing)
+    gemb_run_id in (9, 10) || isnothing(physics_member) ||
+        error("GEMB run $(gemb_run_id) has no physics members; physics_member = $(repr(physics_member)) applies to runs 9 and 10")
 
     if gemb_run_id == 1
         dpscale = Dim{:pscale}(["p1"]) # do not change order as these are lookup values
@@ -169,6 +214,30 @@ function gemb_info(; gemb_run_id = 4)
             precipitation_scale=nothing,
             filename_gemb_combined="/mnt/bylot-r3/data/gemb/raw/gemb_glacier_sims_tiles_1950to2026.jld2",
             modify_melt_only=false
+        )
+    elseif gemb_run_id == 9 || gemb_run_id == 10
+        # Same tile-based path as runs 7 and 8. Run 9 is the production sweep in `tile_runs_v2` and run
+        # 10 the pilot sweep in `tile_runs_pilot`, on its own perturbation grid and tile subset. Each
+        # holds one sweep per physics member, and each member has a tile directory and a combined file
+        # of its own, so no tile of another member or of an earlier sweep can enter this ensemble and no
+        # file built from one is taken for its output.
+        isnothing(physics_member) &&
+            error("GEMB run $(gemb_run_id) holds one tile sweep per physics member; pass physics_member " *
+                  "(the reference is gemb_reference_physics_member = $(repr(gemb_reference_physics_member)))")
+        member = check_gemb_physics_member(physics_member)
+        parts = gemb_physics_member_parts(member)
+        gemb_run_id == 9 && parts.precipitation_gradient > 0 &&
+            error("precipitation-gradient members ($(repr(member))) are defined for the pilot sweep (GEMB " *
+                  "run 10) only; run 9 needs a geotile-mean pscale axis its tiles' bands stay on first")
+        sweep, suffix = gemb_run_id == 9 ? ("tile_runs_v2", "v2") : ("tile_runs_pilot", "pilot")
+        gemb_info = (;
+            tile_dir=joinpath(get(ENV, "CLIMATE_CACHE", "/mnt/bylot-r3/data/era5land"), sweep, parts.tile_member),
+            precipitation_scale=nothing,
+            filename_gemb_combined="/mnt/bylot-r3/data/gemb/raw/gemb_glacier_sims_tiles_1950to2026_$(suffix)_$(member).jld2",
+            modify_melt_only=false,
+            physics_member=member,
+            forcing_grid=gemb_run_id == 9 ? nothing :
+                         parts.precipitation_gradient > 0 ? gemb_pilot_gradient_forcing_grid : gemb_pilot_forcing_grid
         )
     elseif gemb_run_id == 8
         # Same tile-based path as run 7, over a wider ΔT axis: `[-3, -1, -0.5, 0, 0.5, 1, 3, 4, 5, 6]`

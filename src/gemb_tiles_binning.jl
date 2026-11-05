@@ -2,19 +2,20 @@
 # Build the GEMB forcing ensemble from GEMB_GlacierSims tile NetCDF.
 # =============================================================================
 #
-# Replaces `gemb_classes_binning.jl`. That script's job was mostly to repair sparse point output:
-# buffer each geotile's search extent until the elevation profile filled, interpolate and extrapolate
-# across height bins, and fake elevation classes by scaling melt. A tile file is complete over its own
-# geotile's height range and carries a real (ΔT × precipitation scaling) forcing matrix, so all of that
-# is gone and this script only reads, area-weights and rebins. Height interpolation survives in one
-# place: a geotile the sweep does not cover borrows the nearest tile, whose bands need not line up with
-# the target's ice.
+# A tile file is complete over its own geotile's height range and carries a real (ΔT × precipitation
+# scaling) forcing matrix, so this script only reads, area-weights and rebins. Height interpolation is
+# used in one place: a geotile the sweep does not cover borrows the nearest tile, whose bands need not
+# line up with the target's ice.
 #
 # The forcing matrix's second axis is a temperature offset in K (`:ΔT`), where the `.mat` path used a
 # melt multiplier (`:mscale`). Downstream code detects which it is from the sign of the axis values.
 #
-# Output: a DimStack over (geotile, date, pscale, ΔT) in km³ of ice equivalent, saved as "gemb_dv" and
-# read back by `gemb_ensemble_dv(; gemb_run_id)`.
+# Output: one DimStack per surface mask over (geotile, date, pscale, ΔT) in km³ of ice equivalent,
+# area-weighted by that mask's hypsometry, saved as "gemb_dv" with its "surface_mask" and the
+# "tile_provenance" of the tile files read (`GGA.gemb_tile_provenance`) to
+# `gemb_geotile_dv_file(gembinfo, surface_mask)` and read back by
+# `gemb_ensemble_dv(; gemb_run_id, surface_mask)`. Altimetry members are calibrated against the ensemble
+# of their own mask.
 # GEMB output is in metres of ice equivalent at the density each tile records as `model_density_ice`.
 
 begin
@@ -33,24 +34,22 @@ begin
 
     project_id = :v01
     geotile_width = 2
-    surface_mask = :glacier
-    gemb_run_id = 8
+    gemb_surface_masks = [:glacier, :glacier_rgi7]
+    # The GEMB run and physics member whose tile sweep is binned; `run_all.jl` sets both before
+    # including this file. Run 10 is the pilot, binned on the geotiles with a tile of their own.
+    @isdefined(gemb_run_id) || (gemb_run_id = 9)
+    @isdefined(gemb_physics_member) || (gemb_physics_member = GGA.gemb_reference_physics_member)
 
-    gembinfo = GGA.gemb_info(; gemb_run_id)
+    gembinfo = GGA.gemb_info(; gemb_run_id, physics_member=gemb_physics_member)
 
-    # Date bins: the project's 30-day spacing, extended back to 1970 while keeping the existing edges
-    # so no bin already in use moves.
+    # Date bins: the calendar months of `GVC.project_date_bins`, labelled on the 15th, extended back to
+    # 1970. Every altimetry bin then has a GEMB bin with the same label, which `gemb_calibration` requires.
     date_range, _ = GVC.project_date_bins()
-    Δd = 30
-    date_range = reverse(last(date_range):-Day(Δd):Date(1970, 1, 1))
-    date_center = date_range[1:end-1] .+ Day(Δd / 2)
+    date_range = Date(1970, 1, 1):Month(1):last(date_range)
+    date_center = collect(date_range[1:end-1]) .+ Day(14)
 
     length(date_range) == length(date_center) + 1 ||
         error("date_range and date_center lengths are inconsistent")
-
-    geotiles = GGA._geotile_load_align(; surface_mask, geotile_order=nothing,
-                                      only_geotiles_w_area_gt_0=true)
-    area_km2 = GGA._geotile_area_km2(; surface_mask, geotile_width)
 
     # Every geotile holding ice is processed. Those the sweep covers are read from their own tile; the
     # rest borrow the nearest one and are rebinned onto their own hypsometry by `process_gemb_tiles`,
@@ -61,7 +60,34 @@ begin
     available = keys(GGA.gemb_tile_paths(gembinfo.tile_dir;
                                         covering=(first(date_center), last(date_center))))
     println("tile files: $(length(coverage)), of which $(length(available)) span the date axis")
-    println("geotiles with a tile of their own: $(sum(in(id, available) for id in geotiles.id)) of $(nrow(geotiles))")
+    println("dates: $(length(date_center)) bins, $(first(date_center)) .. $(last(date_center))")
+end;
+
+for surface_mask in gemb_surface_masks
+    geotiles = GGA._geotile_load_align(; surface_mask, geotile_order=nothing,
+                                      only_geotiles_w_area_gt_0=true)
+    area_km2 = GGA._geotile_area_km2(; surface_mask, geotile_width)
+
+    println("$(surface_mask): geotiles with a tile of their own: $(sum(in(id, available) for id in geotiles.id)) of $(nrow(geotiles))")
+
+    if gemb_run_id == 10
+        own = GGA.gemb_tile_own_geotiles(geotiles.id, gembinfo.tile_dir;
+                                         covering=(first(date_center), last(date_center)))
+        geotiles = geotiles[in.(geotiles.id, Ref(Set(own))), :]
+        println("$(surface_mask): pilot run, binned on the $(nrow(geotiles)) geotiles with a pilot tile of their own")
+
+        # A precipitation-gradient member covers only the geotiles whose bands stay on their tile's
+        # pscale axis at every node of its forcing grid; the rest are listed, not binned.
+        g = GGA.gemb_physics_member_parts(gemb_physics_member).precipitation_gradient
+        if g > 0
+            split = GGA.gemb_gradient_supported_geotiles(geotiles.id, area_km2, gembinfo.tile_dir, g,
+                                                         gembinfo.forcing_grid.pscale;
+                                                         covering=(first(date_center), last(date_center)))
+            geotiles = geotiles[in.(geotiles.id, Ref(Set(split.supported))), :]
+            println("$(surface_mask): $(gemb_physics_member) represents its gradient on $(nrow(geotiles)) geotiles; excluded:")
+            show(stdout, MIME"text/plain"(), split.excluded); println()
+        end
+    end
 
     if !isnothing(rgi_subset)
         GGA.add_single_rgi_column!(geotiles)
@@ -73,41 +99,41 @@ begin
         geotiles = geotiles[geotiles.id.==single_geotile_test, :]
     end
 
-    nrow(geotiles) == 0 && error("no geotiles left to process")
+    nrow(geotiles) == 0 && error("$(surface_mask): no geotiles left to process")
     area_km2 = area_km2[geotile=At(geotiles.id)]
 
-    println("geotiles to process: $(nrow(geotiles))  ($(round(Int, sum(area_km2))) km² of ice)")
-    println("dates: $(length(date_center)) bins, $(first(date_center)) .. $(last(date_center))")
-end;
+    println("$(surface_mask): geotiles to process: $(nrow(geotiles))  ($(round(Int, sum(area_km2))) km² of ice)")
 
-begin
-    gemb_dv0 = GGA.process_gemb_tiles(geotiles, area_km2; gembinfo.tile_dir, date_center)
+    gemb_dv0 = GGA.process_gemb_tiles(geotiles, area_km2; gembinfo.tile_dir, date_center,
+                                      physics_member=gemb_physics_member,
+                                      forcing_grid=get(gembinfo, :forcing_grid, nothing))
+    tile_provenance = DimensionalData.metadata(gemb_dv0)["tile_provenance"]
 
     gemb_dv0 = GGA.gemb_add_derived_vars!(gemb_dv0)
 
     # The same gates the `.mat` path asserts. They are cheap and they have caught real problems.
     for k in keys(gemb_dv0)
         if any(isnan.(gemb_dv0[k][date=Near(Date(2000, 1, 1))]))
-            error("NaN found in $(k) for nearest Date(2000,1,1)")
+            error("$(surface_mask): NaN found in $(k) for nearest Date(2000,1,1)")
         end
     end
 
     for k in [:refreeze, :rain, :acc, :melt, :runoff]
         if any(diff(gemb_dv0[k], dims=:date) .< -1E-9)
-            error("!!! Negative values found in $(k) !!!!")
+            error("$(surface_mask): negative values found in $(k)")
         end
     end
 
     if any(diff(gemb_dv0[:refreeze], dims=:date) .- diff(gemb_dv0[:melt], dims=:date) .> 1E-9)
-        error("!!! refreeze is greater than melt !!!!")
+        error("$(surface_mask): refreeze is greater than melt")
     end
 
-    println("all checks passed")
+    println("$(surface_mask): all checks passed")
 
     if isnothing(single_geotile_test)
-        gemb_geotile_filename_dv = replace(gembinfo.filename_gemb_combined,
-                                           ".jld2" => "_geotile_dv.jld2")
-        save(gemb_geotile_filename_dv, "gemb_dv", gemb_dv0)
+        gemb_geotile_filename_dv = GGA.gemb_geotile_dv_file(gembinfo, surface_mask)
+        save(gemb_geotile_filename_dv, Dict("gemb_dv" => gemb_dv0, "surface_mask" => String(surface_mask),
+                                            "tile_provenance" => tile_provenance))
         println("wrote $(gemb_geotile_filename_dv)")
     end
 end

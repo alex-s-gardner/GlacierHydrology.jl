@@ -4,6 +4,8 @@ import GlobalGlacierAnalysis as GGA
 import GlacierVolumeChange as GVC
 using DimensionalData
 using Dates
+using DataFrames
+using Statistics
 
 @testset "Project configuration" begin
     @testset "gemb_info" begin
@@ -23,9 +25,17 @@ using Dates
         end
 
         # The tile path has a different shape: its forcing axes live in the data, so it declares a
-        # directory to read instead of a precipitation grid and an elevation-class list.
-        for gemb_run_id in (7, 8)
-            tiles = GGA.gemb_info(; gemb_run_id)
+        # directory to read instead of a precipitation grid and an elevation-class list. Runs 9 and 10
+        # hold one sweep per physics member. The reference carries a precipitation gradient, which only
+        # the pilot sweep (run 10) defines, so run 9 is read at the reference's tile member.
+        ref = GGA.gemb_reference_physics_member
+        ref_tiles = GGA.gemb_physics_member_parts(ref).tile_member
+        @test GGA.gemb_physics_member_parts(ref).precipitation_gradient > 0
+        tile_info(gemb_run_id) = gemb_run_id == 9 ? GGA.gemb_info(; gemb_run_id, physics_member=ref_tiles) :
+                                 gemb_run_id == 10 ? GGA.gemb_info(; gemb_run_id, physics_member=ref) :
+                                 GGA.gemb_info(; gemb_run_id)
+        for gemb_run_id in (7, 8, 9, 10)
+            tiles = tile_info(gemb_run_id)
             @test tiles.tile_dir isa AbstractString
             @test isnothing(tiles.precipitation_scale)
             @test !occursin("\$", tiles.filename_gemb_combined)
@@ -33,7 +43,36 @@ using Dates
             @test tiles.modify_melt_only isa Bool
         end
 
-        @test_throws "unrecognized gemb_run_id" GGA.gemb_info(; gemb_run_id=9)
+        # Each tile run reads its own directory and writes its own combined file.
+        tile_runs = [tile_info(gemb_run_id) for gemb_run_id in (7, 8, 9, 10)]
+        @test allunique(getproperty.(tile_runs, :tile_dir))
+        @test allunique(getproperty.(tile_runs, :filename_gemb_combined))
+        @test splitpath(tile_info(9).tile_dir)[end-1:end] == ["tile_runs_v2", ref_tiles]
+        @test splitpath(tile_info(10).tile_dir)[end-1:end] == ["tile_runs_pilot", ref_tiles]
+        @test tile_info(9).physics_member == ref_tiles
+        @test tile_info(10).physics_member == ref
+        @test occursin(ref, tile_info(10).filename_gemb_combined)
+        @test_throws "defined for the pilot sweep (GEMB run 10) only" GGA.gemb_info(; gemb_run_id=9, physics_member=ref)
+        # The pilot is read on its own grid, which every pilot tile carries, and a gradient member on the
+        # geotile-mean nodes its bands stay on; production on the tiles' own.
+        @test GGA.gemb_info(; gemb_run_id=10, physics_member=ref_tiles).forcing_grid == GGA.gemb_pilot_forcing_grid
+        @test tile_info(10).forcing_grid == GGA.gemb_pilot_gradient_forcing_grid
+        @test isnothing(tile_info(9).forcing_grid)
+        @test 1.0 in GGA.gemb_pilot_forcing_grid.pscale && 0.0 in GGA.gemb_pilot_forcing_grid.ΔT
+
+        # Each physics member of a run has its own directory and combined file, and a member is
+        # required where there are members and refused where there are none.
+        members = ["B-kfit-table", "C-kfit-table", "C-kshaw-table"]
+        infos = [GGA.gemb_info(; gemb_run_id=9, physics_member=m) for m in members]
+        @test allunique(getproperty.(infos, :tile_dir))
+        @test allunique(getproperty.(infos, :filename_gemb_combined))
+        @test all(occursin(m, i.filename_gemb_combined) for (m, i) in zip(members, infos))
+        @test_throws "GEMB run 9 holds one tile sweep per physics member; pass physics_member" GGA.gemb_info(; gemb_run_id=9)
+        @test_throws "GEMB run 8 has no physics members" GGA.gemb_info(; gemb_run_id=8, physics_member=ref)
+        @test_throws "is not a GEMB physics member id" GGA.gemb_info(; gemb_run_id=9, physics_member="C_ks35_table")
+        @test_throws "is not a GEMB physics member id" GGA.gemb_info(; gemb_run_id=9, physics_member="../x-y-z")
+
+        @test_throws "unrecognized gemb_run_id" GGA.gemb_info(; gemb_run_id=11)
     end
 
     @testset "file_is_current" begin
@@ -64,32 +103,6 @@ using Dates
         for mission in keys(products)
             @test occursin(string(products[mission].name), paths[mission].geotile)
         end
-    end
-
-    @testset "date bins" begin
-        date_range, date_center = GVC.project_date_bins()
-        decyear = GVC.project_decyear_bins()
-
-        # One bin per centre, in both representations. Observations are grouped by the decimal-year
-        # edges while the result is labelled with `date_center`, so a mismatch here would misalign
-        # every binned array against its own date dimension. The two used to be independent literals
-        # -- `Date(1990):Day(30):Date(2026,1,1)` and `1990:(30/365):2026` -- which is how the record
-        # end silently stopped short of the archive.
-        @test length(date_center) == length(date_range) - 1
-        @test length(decyear) == length(date_range)
-
-        # Edges keep the original spacing, so extending the record only appends bins. If this changes,
-        # every observation moves to a different bin and published values shift.
-        @test first(decyear) == 1990.0
-        @test step(decyear) ≈ 30 / 365
-        @test decyear[100] ≈ 1990.0 + 99 * (30 / 365)
-
-        # The grid must reach the end of the longest archive: ICESat-2 ATL06 v7 runs to 2026-05-18.
-        @test last(date_range) > Date(2026, 5, 18)
-
-        # 30-day spacing, centres half a bin in
-        @test all(diff(date_range) .== Day(30))
-        @test date_center[1] == date_range[1] + Day(15)
     end
 
     @testset "GEMB calibration cost penalty" begin

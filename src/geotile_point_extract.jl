@@ -15,15 +15,16 @@ outfile_suffix = "_dT"  # ASCII stand-in for ΔT: this ends up in a filename
 
 paths = GGA.pathlocal
 path2reference = joinpath(paths[:data_dir], reference_run) 
-binned_synthesized_dv_file = replace(path2reference, ".jld2" => "_gembfit_dv$(outfile_suffix).jld2")
+binned_synthesized_dv_file = GGA.gemb_physics_path(replace(path2reference, ".jld2" => "_gembfit_dv$(outfile_suffix).jld2"),
+                                                   GGA.gemb_reference_physics_member)
 
 geotiles0 = FileIO.load(binned_synthesized_dv_file, "geotiles")
 
 index = findfirst(GO.intersects.(Ref((x, y)), GGA.extent2rectangle.(geotiles0[:, :extent])))
 dates = colmetadata(geotiles0, "dm", "date")
 
-# convert from km3 to kg m-2
-dm = geotiles0[index, :dm] ./ geotiles0[index, "mie2cubickm"] .* GGA.δice
+# `dm` is Gt and `mie2cubickm` is area_km2/1000, so Gt / (km²/1000) × 1000 is Gt km⁻² × 10⁶ = kg m⁻²
+dm = geotiles0[index, :dm] ./ geotiles0[index, "mie2cubickm"] .* 1000
 valid = .!isnan.(dm)
 
 df = DataFrame(

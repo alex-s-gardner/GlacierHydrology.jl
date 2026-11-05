@@ -12,8 +12,8 @@
 # 14.  Calibrate GEMB model to altimetry data for each synthesized geotile dataset
 # 15.  Generate glacier-level summary files with key statistics and metrics
 # 16.  Export geotile-level glacier change trends and amplitudes to GIS-compatible files
-# 17.  Route land surface model runoff through river networks
-# 18.  Route glacier runoff through river networks
+# 17.  Route glacier runoff through river networks
+# 18.  Route land surface model runoff through the glacier-fed river reaches found in 17
 # 19.  Calculate gmax (maximum glacier contribution to river flux)
 # 20.  Generate point-based figures for gmax visualization
 # 21.  Produce regional results for analysis and sharing
@@ -33,50 +33,68 @@ begin
 
     geotile_width = 2
     single_geotile_test = nothing #GGA.geotiles_golden_test[1]
-    gemb_run_id = 8
+    gemb_run_id = 9
+    # The GEMB physics member steps 11-24 run against. Each member's calibration (steps 13-14) is written
+    # to its own folder, `gemb_physics/<member>/`, beside the altimetry members; another member is a
+    # rerun of steps 11-14 with this changed.
+    gemb_physics_member = GGA.gemb_reference_physics_member
 
     # Glacier volume change: one product per ensemble member, written by GVC.create_dataset
     volume_dataset = GVC.VolumeDatasetConfig(; geotile_width)
     path2runs_filled = GVC.ensemble_members(volume_dataset)
     reference_ensemble_file = GVC.reference_member()
+    # Glacier inventory of the reference member. The glacier-level products (steps 15-24) spread the
+    # reference member's geotile values over this inventory's glaciers.
+    surface_mask_ref = GVC.binned_filled_fileparts(reference_ensemble_file).surface_mask
+    # Every surface mask among the altimetry members; GEMB is binned, adjusted and calibrated per mask.
+    surface_masks = unique(getproperty.(GVC.binned_filled_fileparts.(path2runs_filled), :surface_mask))
 
     path2runs_synthesized = replace.(path2runs_filled, "aligned.jld2" => "synthesized.jld2")
-    binned_synthesized_dv_files = replace.(path2runs_synthesized, ".jld2" => "_gembfit_dv.jld2")
-    binned_synthesized_dv_file_ref = replace.(reference_ensemble_file, "_aligned.jld2" => "_synthesized_gembfit_dv.jld2")
+    binned_synthesized_dv_files = GGA.gemb_physics_path.(replace.(path2runs_synthesized, ".jld2" => "_gembfit_dv.jld2"),
+                                                         gemb_physics_member)
+    binned_synthesized_dv_file_ref = GGA.gemb_physics_path(replace(reference_ensemble_file, "_aligned.jld2" => "_synthesized_gembfit_dv.jld2"),
+                                                           gemb_physics_member)
 end
 
 # 11. Create glacier model (GEMB) classes for each geotile
 include("gemb_tiles_binning.jl")
 
-# parms_ref = GGA.binned_filled_fileparts(binned_synthesized_dv_file_ref)
-# Steps 12-14 all descend from the GEMB ensemble step 11 rebuilds, so they share one cutoff: anything
-# predating the current GEMB tile sweep is stale. Step 11 itself has no cutoff -- it always rebuilds.
-force_remake_before_gemb = DateTime("2026-10-04T19:00:00") + GVC.local2utc
-
-gemb = GGA.gemb_ensemble_dv(; gemb_run_id);
+# Steps 12-14 all descend from the GEMB ensemble step 11 writes, so they share one cutoff: anything
+# older than the newest of its per-mask files is stale and is rebuilt. Step 11 itself has no cutoff --
+# it always rebuilds -- and the cutoff throws if any of those files is missing.
+force_remake_before_gemb = GGA.gemb_ensemble_built(GGA.gemb_info(; gemb_run_id, physics_member=gemb_physics_member),
+                                                   String.(surface_masks))
 
 # 12. Calculate global glacier solid ice discharge, filled Antarctic data with modeled SMB
-discharge = GGA.global_discharge_filled(;
-    surface_mask="glacier", # = parms_ref.surface_mask, # having issues changing this to :glacier_rgi7
-    discharge_global_fn=GGA.pathlocal[:discharge_global],
-    gemb,
-    discharge2smb_max_latitude = -60,
-    discharge2smb_equilibrium_period=(Date(1979), Date(2000)),
-    pscale=1,
-    ΔT=0,
-    geotile_width=2,
-    force_remake_before=force_remake_before_gemb,
-    force_remake_before_hypsometry=nothing
-);
-
-gemb = GGA.dv_adjust4discharge!(gemb, discharge)
+# GEMB, its discharge adjustment and its calibration are per surface mask: each altimetry member is
+# fitted against GEMB area-weighted by its own mask's hypsometry.
+gemb = Dict{String,Any}()
+discharge = Dict{String,Any}()
+for m in String.(surface_masks)
+    gemb[m] = GGA.gemb_ensemble_dv(; gemb_run_id, surface_mask=m, physics_member=gemb_physics_member)
+    discharge[m] = GGA.global_discharge_filled(;
+        surface_mask=m,
+        discharge_global_fn=GGA.discharge_global_file(m),
+        gemb=gemb[m],
+        discharge2smb_max_latitude = -60,
+        discharge2smb_equilibrium_period=(Date(1979), Date(2000)),
+        pscale=1,
+        ΔT=0,
+        geotile_width=2,
+        force_remake_before=force_remake_before_gemb,
+        force_remake_before_hypsometry=nothing
+    )
+    GGA.dv_adjust4discharge!(gemb[m], discharge[m])
+end
 
 # 13. Calibrate GEMB (Glacier Energy and Mass Balance) model to altimetry data by finding optimal fits for grouped geotiles 
 # [4 hrs on 128 cores, 150GB of memory]
+# `gemb_calibration` throws while `GGA.gemb_forcing_prior_run_id` differs from `gemb_run_id`: the
+# forcing prior and its penalty weight describe one GEMB run and are re-derived for each new one.
 
 GGA.gemb_calibration(
     path2runs_synthesized, 
-    gemb[:dv];
+    Dict(m => g[:dv] for (m, g) in gemb);
     geotile_width,
     geotile_grouping_min_feature_area_km2=100, 
     single_geotile_test,
@@ -120,7 +138,7 @@ glacier_summary_file = GGA.glacier_summary_file(
     geotile_width,
     error_scaling=1.5, 
     reference_period=(DateTime(2000, 4, 1), DateTime(2024, 12, 31)), 
-    surface_mask="glacier",  # = parms_ref.surface_mask, # having issues changing this to :glacier_rgi7
+    surface_mask=surface_mask_ref,
     force_remake_before=DateTime(2028, 1, 1),
 )
     
@@ -131,11 +149,13 @@ GGA.gembfit_dv2gpkg(binned_synthesized_dv_file_ref;
     datelimits=(DateTime(2000, 3, 1), DateTime(2025, 1, 1))
 )
 
-# 17. Route land surface model runoff through river networks for river flux calculation
-include("land_surface_model_routing.jl")
+# 17. Route glacier runoff through river networks for glacier flux calculation [5 min]
+# The first run for an inventory also finds each glacier's lowest point on the 30 m DEM and traces its
+# river reaches; both are cached per inventory (`GGA.glacier_routing_file`, `GGA.glacier_rivers_file`).
+GGA.glacier_routing(; surface_mask=surface_mask_ref);
 
-# 18. Route glacier runoff through river networks for glacier flux calculation [5 min]
-GGA.glacier_routing(; surface_mask = "glacier"); # !!! having issues with reading DEM.. leave as rgi6 for now !!!!
+# 18. Route land surface model runoff through the glacier-fed river reaches of step 17
+include("land_surface_model_routing.jl")
 
 # 19. Calculate gmax (maximum glacier contribution to river flux) [3.4 min]
 include("gmax_global.jl")

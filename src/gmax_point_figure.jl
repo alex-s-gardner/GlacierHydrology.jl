@@ -32,10 +32,11 @@ begin
 
     glacier_flux_path = joinpath(paths[:project_dir], "Gardner2025_glacier_summary_riverflux.nc")
 
-    glacier_rivers_land_flux_path = joinpath(paths[:river],"riv_pfaf_MERIT_Hydro_v07_Basins_v01_glacier_Qs_acc_Qsb_acc.nc")
-    glacier_rivers_snow_flux_path = joinpath(paths[:river],"riv_pfaf_MERIT_Hydro_v07_Basins_v01_glacier_Qsm_acc.nc")
+    surface_mask = GGA.reference_surface_mask()
+    glacier_rivers_path = GGA.glacier_rivers_file(surface_mask)
+    glacier_rivers_land_flux_path = replace(glacier_rivers_path, ".arrow" => "_Qs_acc_Qsb_acc.nc")
+    glacier_rivers_snow_flux_path = replace(glacier_rivers_path, ".arrow" => "_Qsm_acc.nc")
     land_path = paths[:river]
-    glacier_rivers_path = joinpath(paths[:river], "riv_pfaf_MERIT_Hydro_v07_Basins_v01_glacier.arrow")
 end
 
 # Dates.unix2datetime(mtime(glacier_flux_path))

@@ -62,7 +62,7 @@ begin
 
     # path to flux data
     rivers_path = joinpath(paths.data_dir, "rivers/MERIT_Hydro_v07_Basins_v01")
-    glacier_rivers_path = joinpath(rivers_path, "riv_pfaf_MERIT_Hydro_v07_Basins_v01_glacier.arrow")
+    glacier_rivers_path = GGA.glacier_rivers_file(GGA.reference_surface_mask())
 
     glacier_summary_file = GGA.pathlocal[:glacier_summary]
     glacier_summary_gmax_file = replace(glacier_summary_file, ".nc" => "_gmax.gpkg")

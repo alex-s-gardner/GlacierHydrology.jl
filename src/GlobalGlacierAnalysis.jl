@@ -57,6 +57,7 @@ module GlobalGlacierAnalysis
    using NearestNeighbors
    using StatsBase
    using Stencils  
+   import TOML
    using NonlinearSolve
    using ScatteredInterpolation
    using LsqFit
@@ -109,6 +110,8 @@ module GlobalGlacierAnalysis
    include("utilities_project.jl")
    include("utilities_gemb.jl")
    include("utilities_gemb_tiles.jl")
+   include("utilities_wgms.jl")
+   include("utilities_gemb_physics.jl")
    include("utilities_routing.jl")
    include("utilities_synthesis.jl")
    include("utilities_postprocessing.jl")

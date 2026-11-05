@@ -71,7 +71,6 @@ The workflow implements checkpoint logic to avoid redundant processing:
 
 ### Core Processing Scripts
 - `run_all.jl` — Main workflow orchestrator
-- `gemb_classes_binning.jl` — Glacier model classification
 - `land_surface_model_routing.jl` — Terrestrial runoff routing
 - `glacier_routing.jl` — Glacier runoff routing (called from `run_all.jl`)
 - `gmax_global.jl` — Maximum glacier contribution analysis

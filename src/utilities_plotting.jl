@@ -717,10 +717,14 @@ end
 
 function plot_ref_pscale_ΔT_summary(path2runs_synthesized, binned_synthesized_dv_file_ref; rgi2plot=[99], seasonality_weight=seasonality_weight, distance_from_origin_penalty=distance_from_origin_penalty, ΔT_to_pscale_weight=ΔT_to_pscale_weight, show_title=true, bin_width=0.25)
 
-    ensemble_reference_file = replace(binned_synthesized_dv_file_ref, "_gembfit_dv.jld2" => ".jld2")
+    # The reference run's calibrated synthesis is in its physics member's folder; the altimetry
+    # member it was synthesized from is not.
+    dv_ref, physics_member = gemb_physics_source(binned_synthesized_dv_file_ref)
+    ensemble_reference_file = replace(dv_ref, "_gembfit_dv.jld2" => ".jld2")
 
-    region_fits = ensemble_summary(path2runs_synthesized, ensemble_reference_file;)
-    gemb_fit = GeoDataFrames.read(replace(ensemble_reference_file, ".jld2" => "_gembfit.arrow"))
+    region_fits = ensemble_summary(path2runs_synthesized, ensemble_reference_file; physics_member)
+    gemb_fit = GeoDataFrames.read(gemb_physics_path(replace(ensemble_reference_file, ".jld2" => "_gembfit.arrow"),
+                                                    physics_member))
 
     title1 = "W_s: $(seasonality_weight), W_d: $(distance_from_origin_penalty), W_m2p: $(ΔT_to_pscale_weight)"
 
@@ -775,10 +779,10 @@ function plot_ref_pscale_ΔT_summary(path2runs_synthesized, binned_synthesized_d
 end
 
 
-function plot_ensemble_rgi_timeseries(vars2plot, path2runs_synthesized; center_on_dates=DateTime(2002, 5, 1):Month(1):DateTime(2005, 12, 15), rgi2plot=nothing)
+function plot_ensemble_rgi_timeseries(vars2plot, path2runs_synthesized; center_on_dates=DateTime(2002, 5, 1):Month(1):DateTime(2005, 12, 15), rgi2plot=nothing, physics_member=gemb_reference_physics_member)
 
     # load results for all runs for each RGI [18s]
-    runs_rgi = runs2rgi(path2runs_synthesized)
+    runs_rgi = runs2rgi(path2runs_synthesized; physics_member)
 
     dvarname = Dim{:varname}(vars2plot)
 

@@ -159,7 +159,7 @@ src/
 ├── utilities_readers.jl                # Data I/O functions
 ├── utilities_response2reviewers.jl     # Review response analysis
 │
-├── gemb_classes_binning.jl             # GEMB classification workflow
+├── gemb_tiles_binning.jl               # GEMB tile ensemble per surface mask
 ├── land_surface_model_routing.jl       # LSM runoff routing
 ├── gmax_global.jl                      # Maximum glacier contribution
 ├── gmax_point_figure.jl                # Gmax visualization

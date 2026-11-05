@@ -35,12 +35,13 @@ begin
     glacier_summary_riverflux_file = replace(glacier_summary_file, ".nc" => "_riverflux.nc")
     glacier_summary_gmax_file = replace(glacier_summary_file, ".nc" => "_gmax.gpkg")
 
-    glacier_rivers_land_flux_path = joinpath(paths[:river], "riv_pfaf_MERIT_Hydro_v07_Basins_v01_glacier_Qs_acc_Qsb_acc.nc")
-    glacier_rivers_snow_flux_path = joinpath(paths[:river], "riv_pfaf_MERIT_Hydro_v07_Basins_v01_glacier_Qsm_acc.nc")
+    surface_mask = GGA.reference_surface_mask()
+    glacier_rivers_path = GGA.glacier_rivers_file(surface_mask)
+    glacier_rivers_land_flux_path = replace(glacier_rivers_path, ".arrow" => "_Qs_acc_Qsb_acc.nc")
+    glacier_rivers_snow_flux_path = replace(glacier_rivers_path, ".arrow" => "_Qsm_acc.nc")
 
-    path2discharge = joinpath(paths[:data_dir], "GlacierOutlines/GlacierDischarge/global_glacier_discharge.jld2")
+    path2discharge = GGA.discharge_global_file(surface_mask)
     rivers_paths = GGA.allfiles(paths[:river]; fn_endswith="MERIT_Hydro_v07_Basins_v01.shp", fn_startswith="riv_pfaf")
-    glacier_rivers_path = joinpath(paths[:river], "riv_pfaf_MERIT_Hydro_v07_Basins_v01_glacier.arrow")
 
    
     SECONDS_PER_DAY = 86400

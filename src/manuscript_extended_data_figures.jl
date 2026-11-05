@@ -42,7 +42,7 @@ begin
     #single_geotile_test = #"lat[+60+62]lon[-148-146]"; #"lat[+62+64]lon[-148-146]"; #"lat[+58+60]lon[-136-134]"; #"lat[+58+60]lon[-138-136]"
     #single_geotile_test = "lat[-44-42]lon[+170+172]" # New Zealand
     downscale_to_glacier_method = "area"
-    gemb_run_id = 5
+    gemb_run_id = 9
 
     reference_ensemble_file = GVC.reference_ensemble_file;
     path2runs_synthesized = [replace.(reference_ensemble_file, "aligned.jld2" => "synthesized.jld2")]
@@ -52,9 +52,7 @@ begin
         wgms_mb="/mnt/bylot-r3/data/glacier_mb/WGMS/DOI-WGMS-FoG-2025-02b/data/mass_balance.csv",
         wgms_glacier="/mnt/bylot-r3/data/glacier_mb/WGMS/DOI-WGMS-FoG-2025-02b/data/glacier.csv",
 
-        # GEMB dataset paths
-        gemb_corrected="/mnt/bylot-r3/data/gemb/raw/FAC_forcing_glaciers_NH_1979to2024_820_40_racmo_grid_lwt_e97_0_corrected_geotile_dv.jld2",
-        gemb_original="/mnt/bylot-r3/data/gemb/raw/FAC_forcing_glaciers_1979to2024_820_40_racmo_grid_lwt_e97_0_geotile_dv.jld2", path2glacier=GGA.pathlocal[Symbol("glacier_individual")],
+        path2glacier=GGA.pathlocal[Symbol("glacier_individual")],
     )
 
     # Analysis parameters
@@ -74,26 +72,28 @@ begin
     glacier_summary_file = GGA.pathlocal[:glacier_summary]
 
     # path2perglacier = replace(ensemble_reference_file, ".jld2" => "_perglacier.jld2")
-    path2discharge = GGA.pathlocal[:discharge_global]
+    path2discharge = GGA.discharge_global_file(params_ref.surface_mask)
 
    
     path2rgi_regions = GGA.pathlocal[:rgi6_regions_shp]
 
 end;
 
-gemb = GGA.gemb_ensemble_dv(; gemb_run_id);
+gemb = GGA.gemb_ensemble_dv(; gemb_run_id, surface_mask=params_ref.surface_mask,
+                            physics_member=GGA.gemb_reference_physics_member);
 
 # 12. Calculate global glacier solid ice discharge, filled Antarctic data with modeled SMB
 discharge = GGA.global_discharge_filled(;
-    surface_mask="glacier", # = parms_ref.surface_mask, # having issues changing this to :glacier_rgi7
-    discharge_global_fn=GGA.pathlocal[:discharge_global],
+    surface_mask=params_ref.surface_mask,
+    discharge_global_fn=GGA.discharge_global_file(params_ref.surface_mask),
     gemb,
     discharge2smb_max_latitude=-60,
     discharge2smb_equilibrium_period=(Date(1979), Date(2000)),
     pscale=1,
     ΔT=0,
     geotile_width=2,
-    force_remake_before=DateTime("2025-01-31T14:00") + GVC.local2utc,
+    force_remake_before=GGA.gemb_ensemble_built(GGA.gemb_info(; gemb_run_id, physics_member=GGA.gemb_reference_physics_member),
+                                                [params_ref.surface_mask]),
     force_remake_before_hypsometry=nothing
 );
 

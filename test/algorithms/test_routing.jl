@@ -313,4 +313,17 @@ include("../fixtures/synthetic_network.jl")
         # and flux grows by exactly one unit per step down the chain
         @test [flux[1, DD.At(i)] for i in ids] ≈ collect(1.0:n_nodes) rtol=1e-10
     end
+
+    @testset "glacier river products are named by glacier inventory" begin
+        # The RGI6 names are the ones the existing products were written under.
+        @test GGA.glacier_rivers_file("glacier") ==
+              joinpath(GGA.pathlocal[:river], "riv_pfaf_MERIT_Hydro_v07_Basins_v01_glacier.arrow")
+        @test GGA.glacier_routing_file("glacier") ==
+              replace(GGA.pathlocal[:glacier_individual], ".gpkg" => "_routing.arrow")
+        @test GGA.glacier_rivers_file("glacier_rgi7") ==
+              joinpath(GGA.pathlocal[:river], "riv_pfaf_MERIT_Hydro_v07_Basins_v01_glacier_rgi7.arrow")
+        @test GGA.glacier_routing_file("glacier_rgi7") ==
+              replace(GGA.pathlocal[:glacier_rgi7_individual], ".gpkg" => "_routing.arrow")
+        @test GGA.glacier_routing_file("glacier_rgi7") != GGA.glacier_routing_file("glacier")
+    end
 end

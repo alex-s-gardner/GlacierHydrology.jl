@@ -47,13 +47,14 @@ begin
     rivers_path = joinpath(paths[:river])
     rivers_paths = GGA.allfiles(rivers_path; fn_startswith="riv_pfaf", fn_endswith= "MERIT_Hydro_v07_Basins_v01.shp")
     basins_paths = GGA.allfiles(rivers_path; fn_startswith="cat_pfaf", fn_endswith=".shp")
-    glacier_rivers_path = joinpath(rivers_path, "riv_pfaf_MERIT_Hydro_v07_Basins_v01_glacier.arrow")
+    # The glacier-fed reaches of the reference member's glacier inventory, from `GGA.glacier_routing`.
+    surface_mask = GGA.reference_surface_mask()
+    glacier_rivers_path = GGA.glacier_rivers_file(surface_mask)
 
     glacier_rivers_runoff_path = replace(glacier_rivers_path, ".arrow" => "_runoff.arrow")
     glacier_rivers_runoff_path_jld2 = replace(glacier_rivers_runoff_path, ".arrow" => "_runoff.jld2")
 
-    glacier_outlines_path = "/mnt/bylot-r3/data/GlacierOutlines/rgi60/rgi60_Global.gpkg"
-    glacier_routing_path = replace(glacier_outlines_path, ".gpkg" => "_routing.arrow")
+    glacier_routing_path = GGA.glacier_routing_file(surface_mask)
    
     # Use uncorrected ensemble simulations only
     river_Q_path_ens = joinpath(paths[:data_dir], "rivers/Collins2024/Qout_pfaf_ii_GLDAS_ENS_M_1980-01_2009-12_utc/")
@@ -62,8 +63,8 @@ begin
     # Total runoff is the sum of subsurface runoff "Qsb_tavg" and surface runoff "Qs_tavg".
     runoff_vars = [[:Qs_acc, :Qsb_acc],  [:Qsm_acc]]
     glacier_rivers_land_flux_paths = [
-        joinpath(rivers_path, "riv_pfaf_MERIT_Hydro_v07_Basins_v01_glacier_Qs_acc_Qsb_acc.nc"), 
-        joinpath(rivers_path, "riv_pfaf_MERIT_Hydro_v07_Basins_v01_glacier_Qsm_acc.nc")]
+        replace(glacier_rivers_path, ".arrow" => "_Qs_acc_Qsb_acc.nc"),
+        replace(glacier_rivers_path, ".arrow" => "_Qsm_acc.nc")]
 end
 
 # download GLDAS LSMs

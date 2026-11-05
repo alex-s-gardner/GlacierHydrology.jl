@@ -76,10 +76,12 @@ begin
     glacier_summary_file = GGA.pathlocal[:glacier_summary]
 
     # path2perglacier = replace(ensemble_reference_file, ".jld2" => "_perglacier.jld2")
-    path2discharge =  paths[:discharge_global]
+    path2discharge = GGA.discharge_global_file(GGA.binned_filled_fileparts(reference_ensemble_file).surface_mask)
     path2rgi_regions = paths[:rgi6_regions_shp]
 
-    path2river_flux = joinpath(paths[:river], "riv_pfaf_MERIT_Hydro_v07_Basins_v01_glacier.arrow")
+    # glacier inventory of the reference member: the glacier summary and the river routing follow it
+    surface_mask_ref = GGA.binned_filled_fileparts(reference_ensemble_file).surface_mask
+    path2river_flux = GGA.glacier_rivers_file(surface_mask_ref)
 
     path2runs_filled, params = GVC.binned_filled_filepaths(;
         project_id=:v01,
@@ -134,20 +136,22 @@ begin
 
     # add discarge to region_fits
     using DimensionalData
+    # `runs2rgi` sums each geotile's `discharge` column: the discharge `dm` subtracts. It stays in
+    # region_fits as `discharge_geotile`, for the mass-closure check. The reported `discharge` is the
+    # per-glacier regional sum from `discharge_rgi`. Both are Gt yr⁻¹.
     (dvarname, drgi, dparameters, derr) = dims(region_fits)
-    dvarname_new = Dim{:varname}([collect(dvarname)..., "discharge"])
+    "discharge" in dvarname || error("region_fits has no geotile discharge; runs2rgi must sum \"discharge\"")
+    dvarname_geotile = Dim{:varname}(replace(collect(dvarname), "discharge" => "discharge_geotile"))
+    region_fits = DimensionalData.rebuild(region_fits; dims=(dvarname_geotile, drgi, dparameters, derr))
+    dvarname_new = Dim{:varname}([collect(dvarname_geotile)..., "discharge"])
     region_fits = cat(region_fits, zeros(Dim{:varname}(["discharge"]), drgi, dparameters, derr), dims=dvarname_new)
     region_fits[At("discharge"), :, At("trend"), At(false)] = discharge_rgi[:, At(false)]
     region_fits[At("discharge"), :, At("trend"), At(true)] = discharge_rgi[:, At(true)]
    
     # deteremine endorheic and non-endorheic glacier runoff [3 min]
-    # rivers have only been calculated for rgi6 so this will throw an error if using glacier_rgi7
-    if !occursin("glacier_rgi7", ensemble_reference_file)
-        error("rivers have only been calculated for rgi7 so this will throw an error if using rgi6")
-    else
-        dm_gt_sinktype = GGA.rgi_endorheic(path2river_flux, glacier_summary_file; dates4trend)
-        endorheic_scale_correction = 1 .- dm_gt_sinktype[:,:, At(true)] ./ dm_gt_sinktype[:,:, At(false)]
-    end
+    isfile(path2river_flux) || error("no glacier river routing for surface mask $(surface_mask_ref) at $(path2river_flux): run GGA.glacier_routing(; surface_mask=$(repr(surface_mask_ref))) first")
+    dm_gt_sinktype = GGA.rgi_endorheic(path2river_flux, glacier_summary_file; dates4trend)
+    endorheic_scale_correction = 1 .- dm_gt_sinktype[:,:, At(true)] ./ dm_gt_sinktype[:,:, At(false)]
 
     # compute trends over grace-altim overlap period
     runs_rgi_fits_grace = GGA.rgi_trends(runs_rgi, discharge_rgi, dates_altim_grace_overlap);
@@ -184,7 +188,7 @@ end;
 
 # CREATE OUTPUTS FOR PAPER
 begin
-    geotiles = GGA._geotile_load_align(; surface_mask="glacier_rgi7")
+    geotiles = GGA._geotile_load_align(; surface_mask=surface_mask_ref)
 
     for apply_exclude_regions = [false, true];
 
@@ -293,12 +297,8 @@ begin
                 end
             end
 
-            # add units
-            if k == "fac" || occursin("dv", k)
-                unit = 1u"km^3"
-            else
-                unit = 1u"Gt"
-            end
+            # add units: runs2rgi sums volumes in km³ and masses in Gt; GRACE and GlaMBIE are Gt
+            unit = GGA.is_volume_varname(k) ? 1u"km^3" : 1u"Gt"
 
             var1 *= unit
             regions_out[k] = var1[rgi = At(setdiff(drgi, exclude_regions))]
@@ -620,16 +620,20 @@ begin
     println("\n--------------------- FIGURE 2 numbers ---------------------")
     rgi = 99;
     for v = ["acc", "fac", "dm", "discharge", "runoff", "ec", "rain", "refreeze"]
-        println("$(v):\n    trend: $(round(Int,region_fits[varname = At(v), rgi=At(rgi), parameter= At("trend"), error = At(false)])) ± $(round(Int,region_fits[varname = At(v), rgi=At(rgi), parameter= At("trend"), error = At(true)])) Gt yr-1\n    acceleration:$(round(region_fits[varname = At(v), rgi=At(rgi), parameter= At("acceleration"), error = At(false)], digits=1)) ± $(round(region_fits[varname = At(v), rgi=At(rgi), parameter= At("acceleration"), error = At(true)], digits=1)) Gt yr-2 ")
+        u = GGA.is_volume_varname(v) ? "km3" : "Gt"
+        println("$(v):\n    trend: $(round(Int,region_fits[varname = At(v), rgi=At(rgi), parameter= At("trend"), error = At(false)])) ± $(round(Int,region_fits[varname = At(v), rgi=At(rgi), parameter= At("trend"), error = At(true)])) $(u) yr-1\n    acceleration:$(round(region_fits[varname = At(v), rgi=At(rgi), parameter= At("acceleration"), error = At(false)], digits=1)) ± $(round(region_fits[varname = At(v), rgi=At(rgi), parameter= At("acceleration"), error = At(true)], digits=1)) $(u) yr-2 ")
 
         if v == "dm" || v == "runoff"
             println("    endorheic fraction: [$(round((1-endorheic_scale_correction[At(v), At(rgi)])*100, digits=1))%]")
         end
     end
 
-    # check for mass closure
-    dm0 = region_fits[varname = At("acc"), rgi=At(rgi), parameter= At("trend"), error = At(false)] - region_fits[varname = At("runoff"), rgi=At(rgi), parameter= At("trend"), error = At(false)] - region_fits[varname = At("discharge"), rgi=At(rgi), parameter= At("trend"), error = At(false)] - region_fits[varname = At("ec"), rgi=At(rgi), parameter= At("trend"), error = At(false)] 
-    println("\nThere is a $(round(Int, (dm0 - region_fits[varname = At("dm"), rgi=At(rgi), parameter= At("trend"), error = At(false)]))) Gt yr-1 mass closure error [I ASSUME THAT THIS COMES FROM LINEAR FITTING TO EACH VARIABLE INDIVIDUALLY]")
+    # check for mass closure: acc - runoff - ec is smb, and dm = smb - the geotile discharge, all in Gt
+    closure_gtyr = GGA.mass_closure_residual(region_fits; rgi, discharge="discharge_geotile")
+    println("\nmass closure residual (acc - runoff - ec - discharge - dm): $(round(closure_gtyr; digits=3)) Gt yr-1")
+    abs(closure_gtyr) < 1 || error("mass budget does not close: acc - runoff - ec - discharge - dm = $(closure_gtyr) Gt yr-1")
+    discharge_difference = region_fits[varname = At("discharge"), rgi=At(rgi), parameter= At("trend"), error = At(false)] - region_fits[varname = At("discharge_geotile"), rgi=At(rgi), parameter= At("trend"), error = At(false)]
+    println("per-glacier regional discharge minus summed geotile discharge: $(round(discharge_difference; digits=1)) Gt yr-1")
 
     v = "net_acc";
     p = "trend";

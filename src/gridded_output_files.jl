@@ -57,8 +57,10 @@ begin
 
     reference_ensemble_file = GVC.reference_ensemble_file
         
-    binned_synthesized_dv_files = replace.(path2runs_synthesized, ".jld2" => "_gembfit_dv.jld2")
-    binned_synthesized_dv_file_ref = replace.(reference_ensemble_file, "_aligned.jld2" => "_synthesized_gembfit_dv.jld2")
+    binned_synthesized_dv_files = GGA.gemb_physics_path.(replace.(path2runs_synthesized, ".jld2" => "_gembfit_dv.jld2"),
+                                                         GGA.gemb_reference_physics_member)
+    binned_synthesized_dv_file_ref = GGA.gemb_physics_path(replace(reference_ensemble_file, "_aligned.jld2" => "_synthesized_gembfit_dv.jld2"),
+                                                           GGA.gemb_reference_physics_member)
         
     path2ref = binned_synthesized_dv_file_ref
     path2files = setdiff(binned_synthesized_dv_files, [binned_synthesized_dv_file_ref])

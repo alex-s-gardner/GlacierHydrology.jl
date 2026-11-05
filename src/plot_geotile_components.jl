@@ -19,24 +19,26 @@ using Statistics
 geotile2plot = "lat[-44-42]lon[+170+172]"
 plots_show = true
 plots_save = true
-gemb_run_id = 5
+gemb_run_id = 9
 
 # Load GEMB ensemble data
 println("Loading GEMB ensemble data...")
-gemb = GGA.gemb_ensemble_dv(; gemb_run_id)
+surface_mask = GGA.reference_surface_mask()
+gemb_physics_member = GGA.gemb_reference_physics_member
+gemb = GGA.gemb_ensemble_dv(; gemb_run_id, surface_mask, physics_member=gemb_physics_member)
 
 # Load discharge data
 println("Loading discharge data...")
 discharge = GGA.global_discharge_filled(;
-    surface_mask="glacier",
-    discharge_global_fn=GGA.pathlocal[:discharge_global],
+    surface_mask,
+    discharge_global_fn=GGA.discharge_global_file(surface_mask),
     gemb,
     discharge2smb_max_latitude=-60,
     discharge2smb_equilibrium_period=(Date(1979), Date(2000)),
     pscale=1,
     ΔT=0,
     geotile_width=2,
-    force_remake_before=DateTime("2025-01-31T14:00") + GVC.local2utc,
+    force_remake_before=GGA.gemb_ensemble_built(GGA.gemb_info(; gemb_run_id, physics_member=gemb_physics_member), [surface_mask]),
     force_remake_before_hypsometry=nothing
 )
 
@@ -47,7 +49,8 @@ gemb = GGA.dv_adjust4discharge!(gemb, discharge)
 # Get reference ensemble file and construct path to synthesized data
 reference_ensemble_file = GVC.reference_ensemble_file
 binned_synthesized_file = replace(reference_ensemble_file, "aligned.jld2" => "synthesized.jld2")
-binned_synthesized_dv_file = replace(binned_synthesized_file, ".jld2" => "_gembfit_dv.jld2")
+binned_synthesized_dv_file = GGA.gemb_physics_path(replace(binned_synthesized_file, ".jld2" => "_gembfit_dv.jld2"),
+                                                   gemb_physics_member)
 
 println("Loading mass balance components from: $binned_synthesized_dv_file")
 

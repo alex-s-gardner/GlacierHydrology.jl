@@ -23,10 +23,6 @@ begin
         wgms_mb = "/mnt/bylot-r3/data/glacier_mb/WGMS/DOI-WGMS-FoG-2025-02b/data/mass_balance.csv",
         wgms_glacier = "/mnt/bylot-r3/data/glacier_mb/WGMS/DOI-WGMS-FoG-2025-02b/data/glacier.csv",
 
-        # GEMB dataset paths
-        gemb_corrected = "/mnt/bylot-r3/data/gemb/raw/FAC_forcing_glaciers_NH_1979to2024_820_40_racmo_grid_lwt_e97_0_corrected_geotile_dv.jld2",
-        gemb_original = "/mnt/bylot-r3/data/gemb/raw/FAC_forcing_glaciers_1979to2024_820_40_racmo_grid_lwt_e97_0_geotile_dv.jld2",
-
         path2glacier = GGA.pathlocal[Symbol("glacier_individual")],
     )
 
@@ -56,7 +52,7 @@ begin
     glacier_summary_file = GGA.pathlocal[:glacier_summary]
 
     # path2perglacier = replace(ensemble_reference_file, ".jld2" => "_perglacier.jld2")
-    path2discharge = paths[:discharge_global]
+    path2discharge = GGA.discharge_global_file(GGA.binned_filled_fileparts(reference_ensemble_file).surface_mask)
     path2rgi_regions = paths[:rgi6_regions_shp]
 
     path2river_flux = joinpath(paths[:river], "riv_pfaf_MERIT_Hydro_v07_Basins_v01_glacier.arrow")

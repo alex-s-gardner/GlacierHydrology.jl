@@ -256,9 +256,9 @@ end
     gemb_bestfit_grouped(dv_altim, dv_gemb, geotiles0;
                          distance_from_origin_penalty=0.20,
                          ΔT_to_pscale_weight=1,
-                         seasonality_weight=0.85,
+                         seasonality_weight=GlobalGlacierAnalysis.seasonality_weight,
                          calibrate_to=:all,
-                         is_scaling_factor=Dict("pscale"=>true, "ΔT"=>true))
+                         is_scaling_factor=Dict("pscale"=>true, "ΔT"=>false))
 
 Calibrate the GEMB (Glacier Energy and Mass Balance) forcing parameters to altimetry-derived volume
 changes for groups of geotiles. Glaciers often span multiple geotiles, so calibration is performed on
@@ -272,21 +272,24 @@ matching, and distance from the empirical forcing prior `gemb_forcing_prior` (`o
 :prior`, the default) or from the no-op values 1 for `pscale` and 0 for `ΔT` (`:legacy`).
 
 # Arguments
-- `dv_altim`: DimArray of volume change from altimetry [Gt] with dimensions (:date, :geotile)
-- `dv_gemb`: DimArray of GEMB modeled volume change [Gt] with dimensions (:date, :geotile, :pscale, :ΔT)
+- `dv_altim`: DimArray of volume change from altimetry [km³ ice equivalent] with dimensions (:date, :geotile)
+- `dv_gemb`: DimArray of GEMB modeled volume change [km³ ice equivalent] with dimensions (:date, :geotile, :pscale, :ΔT)
 - `geotiles0`: DataFrame containing geotile metadata with columns :id, :group, :rgi, :extent, :area_km2
   - The :group column identifies mutually exclusive geotile groups for joint calibration
 
 # Keyword Arguments
 - `distance_from_origin_penalty=0.20`: Weight (0-1) for penalty on deviation from pscale=1, ΔT=0
 - `ΔT_to_pscale_weight=1`: Weight (0-1) balancing ΔT vs pscale in optimization (1=equal weight)
-- `seasonality_weight=0.85`: Weight (0-1) for matching seasonal cycle vs absolute volume change
+- `seasonality_weight`: Weight (0-1) for matching seasonal cycle vs absolute volume change; defaults to
+  the package constant `seasonality_weight` (0.85), which `gemb_calibration` also defaults to
 - `calibrate_to=:all`: Which component to calibrate to (:all, :seasonal, :trend, etc.)
 - `is_scaling_factor`: Dict indicating whether pscale/ΔT are multiplicative (true) or additive (false)
 
 # Returns
-- **Normal mode (multiple groups)**: DataFrame with columns [:id, :extent, :group, :pscale, :ΔT, :rgi]
+- **Normal mode (multiple groups)**: DataFrame with columns [:id, :extent, :group, :pscale, :ΔT, :grid_bound, :rgi]
   - One row per geotile with optimized scaling factors (shared within each group)
+  - `grid_bound` names the bounds of the pscale × ΔT search grid the fit lies on (`""` if none; see
+    `_grid_bounds_hit`). One `@warn` reports the number of groups, geotiles and ice area so pinned.
 - **Debug mode (single group)**: Tuple of (cost grid, geotile_ids) for examining optimization landscape
 
 # Implementation Details
@@ -309,12 +312,12 @@ julia> pscale = geotiles_fit.pscale  # Extract precipitation scaling factors
 julia> cost_grid, geotile_ids = gemb_bestfit_grouped(dv_altim, dv_gemb, geotiles_subset)
 ```
 
-See also: `gemb_altim_cost`, `gemb_dv_sample`, `gemb_fit_to_altimetry`
+See also: `gemb_altim_cost`, `gemb_dv_sample`
 """
 function gemb_bestfit_grouped(dv_altim, dv_gemb, geotiles0;
     distance_from_origin_penalty = 20/100,
     ΔT_to_pscale_weight = 1,
-    seasonality_weight = 85/100,
+    seasonality_weight = GlobalGlacierAnalysis.seasonality_weight,
     calibrate_to=:all,
     is_scaling_factor=Dict("pscale" => true, "ΔT" => false),
     origin_penalty_mode=:prior,
@@ -399,13 +402,26 @@ function gemb_bestfit_grouped(dv_altim, dv_gemb, geotiles0;
         end
 
         # modify dataframe outside of loop
+        geotiles[!, :grid_bound] .= ""
         for i in eachindex(groups_unique)
             gindex = groups_unique[i] .== geotile_groups;
             geotiles[gindex, :pscale] .= pscale0[i]
             geotiles[gindex, :ΔT] .= ΔT0[i]
+            geotiles[gindex, :grid_bound] .= _grid_bounds_hit(pscale0[i], ΔT0[i], val(dpscale_search), val(dΔT_search))
         end
 
-        return geotiles[:, [:id, :extent, :group, :pscale, :ΔT, :rgi]]
+        pinned = .!isempty.(geotiles.grid_bound)
+        if any(pinned)
+            area_pinned = sum(sum, geotiles.area_km2[pinned])
+            area_total = sum(sum, geotiles.area_km2)
+            bounds = join(("$k: $(count(==(k), geotiles.grid_bound[pinned]))" for k in unique(geotiles.grid_bound[pinned])), "; ")
+            @warn "$(length(unique(geotiles.group[pinned]))) of $(length(groups_unique)) geotile groups " *
+                  "($(count(pinned)) geotiles, $(round(area_pinned; digits=1)) of $(round(area_total; digits=1)) km² of ice) " *
+                  "are fitted at a bound of the pscale × ΔT grid, so their fit is a limit, not a minimum. " *
+                  "Geotiles per bound: $(bounds)"
+        end
+
+        return geotiles[:, [:id, :extent, :group, :pscale, :ΔT, :grid_bound, :rgi]]
 
     else
         i = 1;
@@ -499,6 +515,8 @@ function _gemb_grid_minimize(f, pscale_grid, ΔT_grid; stride=(4, 5), ncandidate
             c < best[1] && (best = (c, ip, it))
         end
     end
+    isfinite(best[1]) ||
+        error("cost is not finite anywhere in the full-resolution search around the $(length(candidates)) best coarse points")
 
     # 3. refine between the grid neighbours of the best point
     (_, ip, it) = best
@@ -509,6 +527,24 @@ function _gemb_grid_minimize(f, pscale_grid, ΔT_grid; stride=(4, 5), ncandidate
         c < fine[1] && (fine = (c, p, t))
     end
     return (fine[2], fine[3], fine[1])
+end
+
+"""
+    _grid_bounds_hit(pscale, ΔT, pscale_grid, ΔT_grid) -> String
+
+Name the bounds of `pscale_grid × ΔT_grid` that a fitted `(pscale, ΔT)` lies on, joined by `","`:
+any of `"pscale_min"`, `"pscale_max"`, `"ΔT_min"`, `"ΔT_max"`, or `""` for an interior fit. A fit on a
+bound means the cost may still fall beyond the grid, so the value is a limit, not a minimum.
+"""
+function _grid_bounds_hit(pscale, ΔT, pscale_grid, ΔT_grid)
+    hits = String[]
+    for (name, x, grid) in (("pscale", pscale, pscale_grid), ("ΔT", ΔT, ΔT_grid))
+        lo, hi = extrema(grid)
+        atol = 1e-9 * (hi - lo)
+        isapprox(x, lo; atol) && push!(hits, "$(name)_min")
+        isapprox(x, hi; atol) && push!(hits, "$(name)_max")
+    end
+    return join(hits, ",")
 end
 
 """
@@ -636,7 +672,22 @@ Calibrate GEMB (Glacier Energy and Mass Balance) model to altimetry data by find
 
 # Description
 Loads GEMB data and altimetry volume change data, then finds optimal model fits for grouped geotiles.
-Saves calibration results as Arrow files with geometry information.
+Saves calibration results as Arrow files with geometry information, each with the tile-run provenance
+of `dv_gemb` beside it ([`write_gembfit_provenance`](@ref)). An output is skipped as current only when
+both files exist. Throws if `dv_gemb` records no `tile_provenance` ([`gemb_ensemble_dv`](@ref) of a
+tile run).
+
+A fit against a GEMB physics member's ensemble ([`gemb_physics_member`](@ref)) is written to that
+member's folder ([`gemb_physics_path`](@ref)), so the fits of different members never share a file.
+Throws if the member `dv_gemb` records disagrees with the one its tile provenance names.
+
+The pilot sweep (GEMB run 10) covers a subset of tiles, so two defaults follow the run id `dv_gemb`
+records:
+- `complete_groups_only` (default `true` for run 10, `false` otherwise): fit only the geotile groups
+  whose every geotile is in `dv_gemb`, so no group is fitted on part of its ice;
+- `pscale_sanity_check` (default `false` for run 10, `true` otherwise): the fitted-pscale windows of
+  two reference geotiles. It cannot be turned off for any other run, and with it on, a fit that does
+  not include both geotiles throws.
 """
 function gemb_calibration(
     path2runs,
@@ -644,18 +695,23 @@ function gemb_calibration(
     geotile_width=2,
     geotile_grouping_min_feature_area_km2=100,
     single_geotile_test=nothing,
-    seasonality_weight=95/100,
+    seasonality_weight=GlobalGlacierAnalysis.seasonality_weight,
     distance_from_origin_penalty=2 / 100,
     ΔT_to_pscale_weight=1,
     force_remake_before=nothing,
     calibrate_to = :all,
     origin_penalty_mode=:prior,
-    forcing_prior=gemb_forcing_prior
+    forcing_prior=gemb_forcing_prior,
+    complete_groups_only=nothing,
+    pscale_sanity_check=nothing
 )
+    pilot = get(DD.metadata(dv_gemb), "gemb_run_id", nothing) == 10
+    complete_groups_only = something(complete_groups_only, pilot)
+    pscale_sanity_check = something(pscale_sanity_check, !pilot)
+    pscale_sanity_check || pilot ||
+        error("pscale_sanity_check can be turned off only for the pilot sweep (GEMB run 10)")
 
-    # Load GEMB data
-    # Note: GEMB volume change is for a single surface mask - this is a hack since making GEMB dv for multiple surface masks is onerous
-    # However, since GEMB data is calibrated to altimetry that uses different surface masks, this is mostly a non-issue
+    # `dv_gemb` is area-weighted by one surface mask's hypsometry, so every run must use that mask
 
     if !isnothing(single_geotile_test)
         # NOTE: don't prematurely trim data to `single_geotile_test` as fit optimization is done by geotile groups
@@ -665,6 +721,32 @@ function gemb_calibration(
     dgeotile = dims(dv_gemb, :geotile)
     params = binned_filled_fileparts.(path2runs)
     surface_masks = unique(getindex.(params, :surface_mask))
+    gemb_mask = gemb_surface_mask(dv_gemb)
+    surface_masks == [gemb_mask] ||
+        error("dv_gemb is built on the $(gemb_mask) surface mask but path2runs uses $(join(surface_masks, ", ")); " *
+              "pass a Dict of surface mask => dv_gemb to calibrate each run against its own mask")
+
+    # The prior describes one GEMB run's forcing bias; centring the penalty on it for another run pulls
+    # every fit toward the wrong model's bias.
+    if origin_penalty_mode == :prior && distance_from_origin_penalty != 0
+        gemb_run_id = get(DD.metadata(dv_gemb), "gemb_run_id", nothing)
+        isnothing(gemb_run_id) &&
+            error("dv_gemb does not record its gemb_run_id; load it with gemb_ensemble_dv")
+        forcing_prior === gemb_forcing_prior && gemb_run_id != gemb_forcing_prior_run_id &&
+            error("gemb_forcing_prior and distance_from_origin_penalty were derived from GEMB run " *
+                  "$(gemb_forcing_prior_run_id) fits, not run $(gemb_run_id). Re-derive both from run " *
+                  "$(gemb_run_id)'s unpenalized fits (distance_from_origin_penalty = 0) and update them " *
+                  "with gemb_forcing_prior_run_id, or pass a forcing_prior derived for run $(gemb_run_id).")
+    end
+
+    # Each output records the tile sweep it was fitted on (`write_gembfit_provenance`), which
+    # GEMB_GlacierSims' native run requires before it applies the corrections.
+    tile_provenance = get(DD.metadata(dv_gemb), "tile_provenance", nothing)
+    isnothing(tile_provenance) &&
+        error("dv_gemb records no tile_provenance, so the calibration could not record the tile sweep " *
+              "it was fitted on; load a tile-run ensemble with gemb_ensemble_dv")
+    physics_member = gemb_physics_member(dv_gemb)
+    _check_gemb_physics_provenance(tile_provenance["tile_run_parameters"], physics_member, "dv_gemb")
 
     # Windows on the fitted pscale of two reference geotiles, wide enough to pass every member of the
     # ensemble and tight enough to catch a fit that has come out wildly wrong. They are not physical
@@ -713,7 +795,8 @@ function gemb_calibration(
         ex = max(ex_gemb[1], ex_dv[1]), min(ex_gemb[2], ex_dv[2])
         index_dv = (ddate .>= ex[1]) .& (ddate .<= ex[2])
         index_gemb = (ddate_gemb .>= ex[1]) .& (ddate_gemb .<= ex[2])
-        sum(index_dv) == sum(index_gemb) ? nothing : error("index_dv and index_gemb do not have the same length: $(ex)")
+        ddate[index_dv].val == ddate_gemb[index_gemb].val ||
+            error("GEMB and altimetry dates differ over their common span $(ex): the GEMB ensemble must be binned on the altimetry date grid")
         dates2extract = ddate[index_dv].val
 
         dv_gemb = dv_gemb[date=At(ddate_gemb[index_gemb].val)]
@@ -735,6 +818,12 @@ function gemb_calibration(
         # Add groups to geotiles
         _, grp_index = intersectindices(geotiles[surface_mask].id, geotiles_groups.id)
         geotiles[surface_mask][!, :group] = geotiles_groups[grp_index, :group]
+
+        if complete_groups_only
+            geotiles[surface_mask] = complete_geotile_groups(geotiles[surface_mask], geotiles_groups)
+            nrow(geotiles[surface_mask]) > 0 ||
+                error("$(surface_mask): no geotile group lies wholly inside the GEMB ensemble")
+        end
     
         if !isnothing(single_geotile_test)
             index_geotile = findfirst(geotiles[surface_mask].id .== single_geotile_test)
@@ -759,9 +848,11 @@ function gemb_calibration(
     # I'm getting an "geotile volume change contains all NaNs" when run using Threads.. no clue why
     @showprogress desc = "Calibrating GEMB model to altimetry data" for binned_synthesized_file in path2runs
 
-        synthesized_gemb_fit = replace(binned_synthesized_file, ".jld2" => "_gembfit.arrow")
+        synthesized_gemb_fit = gemb_physics_path(replace(binned_synthesized_file, ".jld2" => "_gembfit.arrow"),
+                                                 physics_member)
 
-        if file_is_current(synthesized_gemb_fit, force_remake_before) && isnothing(single_geotile_test)
+        if file_is_current(synthesized_gemb_fit, force_remake_before) &&
+           isfile(gembfit_provenance_file(synthesized_gemb_fit)) && isnothing(single_geotile_test)
             printstyled("    -> Skipping $(synthesized_gemb_fit) because it was created after force_remake_before:$force_remake_before\n"; color=:light_green)
             continue
         else
@@ -796,7 +887,10 @@ function gemb_calibration(
 
                 gembfit = gemb_bestfit_grouped(dv_altim, dv_gemb, geotiles[surface_mask]; seasonality_weight, distance_from_origin_penalty, ΔT_to_pscale_weight, calibrate_to, is_scaling_factor, origin_penalty_mode, forcing_prior)
 
-                for geotile_test in dgeotile_test
+                for geotile_test in (pscale_sanity_check ? dgeotile_test : String[])
+                    any(==(geotile_test), gembfit.id) || error(
+                        "pscale sanity geotile $(geotile_test) is not in the fit; it is checked for " *
+                        "every run but the pilot sweep (GEMB run 10)")
                     geotile_sanity_check = geotile_test
                     gt_index = findfirst(gembfit.id .== geotile_sanity_check)
                     geotile_row = gembfit[gt_index, :]
@@ -820,7 +914,9 @@ function gemb_calibration(
                 gembfit[!, :area_km2] = sum.(geotiles[surface_mask].area_km2)
                 gembfit.geometry = extent2rectangle.(gembfit.extent)
                 gembfit = gembfit[:, Not(:extent)]
+                mkpath(dirname(synthesized_gemb_fit))
                 GeoDataFrames.write(synthesized_gemb_fit, gembfit)
+                write_gembfit_provenance(synthesized_gemb_fit, tile_provenance)
             else
                 cost, geotiles_in_group = gemb_bestfit_grouped(dv_altim, dv_gemb, geotiles[surface_mask]; seasonality_weight, distance_from_origin_penalty, ΔT_to_pscale_weight, calibrate_to, is_scaling_factor, origin_penalty_mode, forcing_prior)
                 return (cost, dv_altim, geotiles_in_group)
@@ -829,6 +925,35 @@ function gemb_calibration(
     end
 end
 
+
+"""
+    complete_geotile_groups(geotiles, groups) -> DataFrame
+
+The rows of `geotiles` (with `id` and `group` columns) whose group has every one of its geotiles in
+`geotiles`, against the full grouping `groups` (with `id` and `group`).
+"""
+function complete_geotile_groups(geotiles, groups)
+    present = Set(geotiles.id)
+    complete = Set(g for g in unique(groups.group)
+                   if all(in(present), groups.id[groups.group .== g]))
+    return geotiles[in.(geotiles.group, Ref(complete)), :]
+end
+
+"""
+    gemb_calibration(path2runs, dv_gemb::AbstractDict; kwargs...)
+
+Calibrate each run in `path2runs` against the GEMB ensemble of its own surface mask: `dv_gemb` maps
+surface mask (`String` or `Symbol`) to the `dv` layer of [`gemb_ensemble_dv`](@ref) for that mask.
+Throws if a run's mask has no entry. Keywords are passed to the single-mask method; with
+`single_geotile_test` set, returns that method's result for the first mask.
+"""
+function gemb_calibration(path2runs, dv_gemb::AbstractDict; kwargs...)
+    for (_, runs, dv_gemb_mask) in _select_by_surface_mask(dv_gemb, path2runs; name="dv_gemb")
+        result = gemb_calibration(runs, dv_gemb_mask; kwargs...)
+        isnothing(result) || return result
+    end
+    return nothing
+end
 
 """
     gemb2geotile(gemb, geotile_row; geotile_buffer=1000, min_gemb_coverage=0.75, ddate::Dim{:date})
@@ -1119,29 +1244,106 @@ end
 
 
 """
-    gemb_ensemble_dv(; gemb_run_id, vars2load=["runoff", "fac", "smb", "rain", "acc", "melt", "ec", "refreeze"])
+    gemb_geotile_dv_file(gembinfo, surface_mask) -> String
 
-Load GEMB geotile ensemble data for a given run ID. Returns a dictionary of variables specified in `vars2load` from the corresponding GEMB geotile volume change file. If `vars2load` is `nothing`, loads all variables from the file.
+Path of the GEMB geotile volume-change ensemble built on the hypsometry of `surface_mask`, as written by
+`gemb_tiles_binning.jl` and read by [`gemb_ensemble_dv`](@ref).
+"""
+gemb_geotile_dv_file(gembinfo, surface_mask) =
+    replace(gembinfo.filename_gemb_combined, ".jld2" => "_geotile_dv_$(surface_mask).jld2")
+
+"""
+    gemb_ensemble_built(gembinfo, surface_masks) -> DateTime
+
+UTC modification time of the newest of `gembinfo`'s per-mask GEMB ensemble files
+([`gemb_geotile_dv_file`](@ref)), on the clock [`file_is_current`](@ref) compares against. Everything
+derived from the ensemble -- discharge, calibration and the calibrated synthesis -- is stale if it is
+older than this, so it is the `force_remake_before` for those steps.
+
+Throws if any of the files is missing.
+"""
+function gemb_ensemble_built(gembinfo, surface_masks)
+    paths = [gemb_geotile_dv_file(gembinfo, surface_mask) for surface_mask in surface_masks]
+    absent = filter(!isfile, paths)
+    isempty(absent) ||
+        error("GEMB ensemble file(s) missing: $(join(absent, ", ")); build them with gemb_tiles_binning.jl")
+    return maximum(path -> Dates.unix2datetime(mtime(path)), paths)
+end
+
+"""
+    gemb_surface_mask(A) -> String
+
+The surface mask whose hypsometry the GEMB output `A` (a DimArray or one layer of the DimStack from
+[`gemb_ensemble_dv`](@ref)) is area-weighted by, read from its metadata. Throws if `A` does not record one.
+"""
+function gemb_surface_mask(A)
+    surface_mask = get(DD.metadata(A), "surface_mask", nothing)
+    isnothing(surface_mask) &&
+        error("GEMB output does not record the surface mask it was built on; load it with " *
+              "gemb_ensemble_dv(; gemb_run_id, surface_mask)")
+    return String(surface_mask)
+end
+
+"""
+    _check_surface_mask(A, expected, name)
+
+Throw unless the `"surface_mask"` in `A`'s metadata is `expected`; `name` identifies `A` in the message.
+"""
+function _check_surface_mask(A, expected, name)
+    found = get(DD.metadata(A), "surface_mask", nothing)
+    found == String(expected) ||
+        error("$name is for surface mask $(repr(found)), expected $(repr(String(expected)))")
+    return nothing
+end
+
+"""
+    _select_by_surface_mask(by_mask::AbstractDict, path2runs; name) -> Vector
+
+Group `path2runs` by the surface mask in each file name and pair every group with its entry in
+`by_mask`, whose keys may be `String`s or `Symbol`s. Returns `(surface_mask, runs, by_mask[surface_mask])`
+tuples, one per mask, in order of first appearance. Throws, naming `name`, if a mask has no entry.
+"""
+function _select_by_surface_mask(by_mask::AbstractDict, path2runs; name)
+    by_mask = Dict(String(k) => v for (k, v) in by_mask)
+    masks = [String(binned_filled_fileparts(f).surface_mask) for f in path2runs]
+    absent = setdiff(unique(masks), keys(by_mask))
+    isempty(absent) ||
+        error("$name has no entry for surface mask $(join(absent, ", ")), used by path2runs; " *
+              "it holds $(join(sort(collect(keys(by_mask))), ", "))")
+    return [(mask, path2runs[masks .== mask], by_mask[mask]) for mask in unique(masks)]
+end
+
+"""
+    gemb_ensemble_dv(; gemb_run_id=9, surface_mask, physics_member=nothing)
+
+Load the GEMB geotile volume-change ensemble of run `gemb_run_id`, area-weighted by the hypsometry of
+`surface_mask`, and add the derived variables (see [`gemb_add_derived_vars!`](@ref)).
 
 # Arguments
 - `gemb_run_id`: Identifier for the GEMB run.
-- `dpscale_expanded_increment`: Step size for increasing the resolution or range of `pscale`.
-- `dΔT_expanded_increment`: Step size for increasing the resolution or range of `ΔT`.
-- `vars2load`: Array of variable names to load (default: common mass balance variables). If `nothing`, loads all variables.
+- `surface_mask`: Surface mask the ensemble was built on, e.g. `:glacier` or `:glacier_rgi7`. Altimetry
+  members are calibrated against the ensemble of their own mask.
+- `physics_member`: the GEMB physics member of a run that has them (see [`gemb_info`](@ref)).
 
 # Returns
-- `Dict` containing the requested variables (DimStack or similar per variable).
+- DimStack over (geotile, date, pscale, ΔT) in km³ of ice equivalent. Every layer records
+  `surface_mask` (see [`gemb_surface_mask`](@ref)), `gemb_run_id` and `gemb_physics_member` (see
+  [`gemb_physics_member`](@ref)) in its metadata, and a tile run also the `tile_provenance` the file
+  was saved with ([`gemb_tile_provenance`](@ref)). That throws if the file records none, was built
+  from a tile directory other than the run's `tile_dir`, or from tiles of another physics member.
 
 # Examples
 ```julia
-julia> dv_gemb = gemb_ensemble_dv(; gemb_run_id=4)
+julia> dv_gemb = gemb_ensemble_dv(; gemb_run_id=8, surface_mask=:glacier_rgi7)
 julia> smb = dv_gemb[:smb]
 ```
 """
-function gemb_ensemble_dv(; gemb_run_id=4)
-    gembinfo = gemb_info(; gemb_run_id)
-    gemb_geotile_filename_dv = replace(gembinfo.filename_gemb_combined, ".jld2" => "_geotile_dv.jld2")
-    dv_gemb = FileIO.load(gemb_geotile_filename_dv, "gemb_dv")
+function gemb_ensemble_dv(; gemb_run_id=9, surface_mask, physics_member=nothing)
+    gembinfo = gemb_info(; gemb_run_id, physics_member)
+    gemb_geotile_filename_dv = gemb_geotile_dv_file(gembinfo, surface_mask)
+    file_surface_mask, dv_gemb = FileIO.load(gemb_geotile_filename_dv, "surface_mask", "gemb_dv")
+    String(file_surface_mask) == String(surface_mask) ||
+        error("$(gemb_geotile_filename_dv) was built on the $(file_surface_mask) surface mask, not $(surface_mask)")
 
     # Ensembles built by `process_gemb_geotiles` carry a melt-multiplier axis named `:mscale`; the
     # synthesis now indexes a temperature-offset axis named `:ΔT`. The two are not interchangeable --
@@ -1158,8 +1360,77 @@ function gemb_ensemble_dv(; gemb_run_id=4)
     # the `dv_gemb[:smb]` usage shown in this function's own docstring would throw a KeyError.
     dv_gemb = gemb_add_derived_vars!(dv_gemb)
 
-    return dv_gemb
+    member = get(gembinfo, :physics_member, nothing)
+    metadata = Dict{String,Any}("surface_mask" => String(surface_mask), "gemb_run_id" => gemb_run_id,
+                                "gemb_physics_member" => member)
+    if haskey(gembinfo, :tile_dir)
+        provenance = _gemb_ensemble_tile_provenance(gemb_geotile_filename_dv, gembinfo.tile_dir)
+        _check_gemb_physics_provenance(provenance["tile_run_parameters"], member, gemb_geotile_filename_dv)
+        metadata["tile_provenance"] = provenance
+    end
+    return DD.maplayers(A -> DD.rebuild(A; metadata), dv_gemb)
+end
 
+# The `gemb_tile_provenance` a tile-run ensemble file was saved with, checked against the tile
+# directory the run reads.
+function _gemb_ensemble_tile_provenance(path, tile_dir)
+    provenance = JLD2.jldopen(path, "r") do f
+        haskey(f, "tile_provenance") ? f["tile_provenance"] : nothing
+    end
+    isnothing(provenance) &&
+        error("$(path) records no tile_provenance, so the tile sweep it was built from is unknown; " *
+              "rebuild it with gemb_tiles_binning.jl")
+    isdir(tile_dir) && provenance["tile_dir"] == realpath(tile_dir) ||
+        error("$(path) was built from the tile files in $(provenance["tile_dir"]), not $(tile_dir)")
+    return provenance
+end
+
+"""
+    gembfit_provenance_file(gembfit_file) -> String
+
+Path of the tile-run provenance written beside a `gemb_calibration` output: `.arrow` replaced by
+`_provenance.toml`, the file GEMB_GlacierSims' `forcing_corrections_provenance_path` names.
+"""
+function gembfit_provenance_file(gembfit_file)
+    endswith(gembfit_file, ".arrow") || error("not an .arrow calibration output: $(gembfit_file)")
+    return replace(gembfit_file, r"\.arrow$" => "_provenance.toml")
+end
+
+"""
+    write_gembfit_provenance(gembfit_file, tile_provenance) -> String
+
+Write [`gembfit_provenance_file`](@ref)`(gembfit_file)` from `tile_provenance` (a
+[`gemb_tile_provenance`](@ref)), in the format GEMB_GlacierSims' `assert_corrections_fitted_on` reads:
+
+```toml
+tile_dir = "/mnt/bylot-r3/data/era5land/tile_runs_v2"
+
+[tile_run_parameters]
+software_gemb_climateforcing_tree = "…"
+software_gemb_glaciersims_tree = "…"
+software_gemb_tree = "…"
+software_gemb_version = "…"
+# … every other software_* parameter the tile files record
+```
+
+The file is written beside the output and then moved into place, so a reader never sees it half
+written. Returns its path.
+"""
+function write_gembfit_provenance(gembfit_file, tile_provenance)
+    tile_dir = tile_provenance["tile_dir"]
+    parameters = tile_provenance["tile_run_parameters"]
+    tile_dir isa AbstractString || error("tile_provenance has no tile_dir")
+    absent = [k for k in GEMB_TILE_PROVENANCE_REQUIRED if !haskey(parameters, k)]
+    isempty(absent) || error("tile_provenance does not record $(join(absent, ", "))")
+
+    path = gembfit_provenance_file(gembfit_file)
+    partial = path * ".partial"
+    open(partial, "w") do io
+        TOML.print(io, Dict{String,Any}("tile_dir" => String(tile_dir),
+                                        "tile_run_parameters" => Dict{String,Any}(parameters)); sorted=true)
+    end
+    mv(partial, path; force=true)
+    return path
 end
 
 """
@@ -2135,8 +2406,9 @@ end
 Adjust GEMB volume change (dv) for discharge in-place by subtracting cumulative discharge over time.
 
 # Arguments
-- `gemb`: Dictionary or DimStack containing :dv (and :date); :dv is modified in-place
-- `discharge`: Object with :discharge (rate) and :date; discharge rate is applied over decimal years
+- `gemb`: DimStack from `gemb_ensemble_dv` containing :dv (and :date); :dv is modified in-place
+- `discharge`: geotile discharge from `global_discharge_filled`, a rate in km³ ice equivalent per year
+  applied over decimal years. Its `"surface_mask"` metadata must match `gemb`'s, or this throws.
 
 # Returns
 - The modified gemb (gemb[:dv] updated).
@@ -2148,6 +2420,7 @@ julia> # gemb[:dv] now has discharge removed
 ```
 """
 function dv_adjust4discharge!(gemb, discharge)
+    _check_surface_mask(discharge, gemb_surface_mask(gemb[:dv]), "discharge")
 
     decyear = decimalyear.(dims(gemb, :date)) .- decimalyear.(dims(gemb, :date)[1]);
     gemb[:dv][:] = @d gemb[:dv] .- (decyear .* discharge[:discharge]);

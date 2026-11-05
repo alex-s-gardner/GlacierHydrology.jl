@@ -641,6 +641,25 @@ end
 # This section establishes all necessary file paths and constants required for the
 # glacier routing workflow, including paths to glacier outlines, river networks,
 # and output locations for processed data.
+"""
+    glacier_routing_file(surface_mask) -> String
+
+Path of the per-glacier routing table (`RiverID`, `RiverIDTrace`, ...) that [`glacier_routing`](@ref)
+writes for the glaciers of `surface_mask`, next to that mask's individual-glacier outlines.
+"""
+glacier_routing_file(surface_mask) =
+    replace(pathlocal[Symbol("$(surface_mask)_individual")], ".gpkg" => "_routing.arrow")
+
+"""
+    glacier_rivers_file(surface_mask) -> String
+
+Path of the river reaches fed by the glaciers of `surface_mask`, written by [`glacier_routing`](@ref).
+The land-surface fluxes routed onto those reaches (`land_surface_model_routing.jl`) are saved beside it
+with the same stem, so every glacier-river product carries the mask in its name.
+"""
+glacier_rivers_file(surface_mask) =
+    joinpath(pathlocal[:river], "riv_pfaf_MERIT_Hydro_v07_Basins_v01_$(surface_mask).arrow")
+
 function glacier_routing(; surface_mask="glacier", route_rgi2ocean=["19"])
     Unitful.register(MyUnits)
     glacier_summary_riverflux_file = replace(pathlocal[:glacier_summary], ".nc" => "_riverflux.nc")
@@ -650,14 +669,14 @@ function glacier_routing(; surface_mask="glacier", route_rgi2ocean=["19"])
 
     # Derived data paths
     glacier_lowest_point_path = replace(paths[Symbol("$(surface_mask)_individual")], ".gpkg" => "_lowest_point.gpkg")
-    glacier_routing_path = replace(paths[Symbol("$(surface_mask)_individual")], ".gpkg" => "_routing.arrow")
+    glacier_routing_path = glacier_routing_file(surface_mask)
 
     # River network paths
     # Note: Two options for river data - using corrected or uncorrected data
 
     # Uncorrected river paths (currently used)
     rivers_paths = allfiles(paths[:river]; fn_endswith="MERIT_Hydro_v07_Basins_v01.shp", fn_startswith="riv_pfaf")
-    glacier_rivers_path = joinpath(paths[:river], "riv_pfaf_MERIT_Hydro_v07_Basins_v01_glacier.arrow")
+    glacier_rivers_path = glacier_rivers_file(surface_mask)
 
     # GLDAS flux data configuration
     use_corrected_flux = false
@@ -877,6 +896,10 @@ begin # [4 minutes]
     glaciers = copy(GeoDataFrames.read(glacier_routing_path)) # getting a strange issue with scope later on so using copy
 
     glacier_flux_nc = NCDataset(pathlocal[:glacier_summary])
+    summary_mask = get(glacier_flux_nc.attrib, "surface_mask", nothing)
+    summary_mask == String(surface_mask) ||
+        error("$(pathlocal[:glacier_summary]) was built for surface mask $(repr(summary_mask)), not " *
+              "$(repr(String(surface_mask))): rerun glacier_summary_file with surface_mask=$(repr(String(surface_mask)))")
         
     glacier_flux0 = Dict()
 
