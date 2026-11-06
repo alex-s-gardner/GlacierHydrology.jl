@@ -676,8 +676,7 @@ function plot_ref_pscale_ΔT_summary(path2runs_synthesized, binned_synthesized_d
     ensemble_reference_file = replace(dv_ref, "_gembfit_dv.jld2" => ".jld2")
 
     region_fits = ensemble_summary(path2runs_synthesized, ensemble_reference_file; physics_member)
-    gemb_fit = GeoDataFrames.read(gemb_physics_path(replace(ensemble_reference_file, ".jld2" => "_gembfit.arrow"),
-                                                    physics_member))
+    gemb_fit = GeoDataFrames.read(gembfit_path(ensemble_reference_file, physics_member))
 
     title1 = "W_s: $(seasonality_weight), W_d: $(distance_from_origin_penalty), W_m2p: $(ΔT_to_pscale_weight)"
 

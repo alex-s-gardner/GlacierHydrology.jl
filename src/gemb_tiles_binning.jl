@@ -104,7 +104,7 @@ for surface_mask in gemb_surface_masks
 
     gemb_dv0 = GlacierHydrology.process_gemb_tiles(geotiles, area_km2; gembinfo.tile_dir, date_center,
                                       physics_member=gemb_physics_member,
-                                      forcing_grid=get(gembinfo, :forcing_grid, nothing))
+                                      gembinfo.forcing_grid)
     tile_provenance = DimensionalData.metadata(gemb_dv0)["tile_provenance"]
 
     gemb_dv0 = GlacierHydrology.gemb_add_derived_vars!(gemb_dv0)

@@ -51,14 +51,13 @@ function ensemble_paths(; geotile_width=2, physics_member=gemb_reference_physics
     filled = GVC.ensemble_members(GVC.VolumeDatasetConfig(; geotile_width))
     filled_ref = GVC.reference_member()
     filled_ref in filled || error("the reference member $(filled_ref) is not among the ensemble members")
-    synthesized_file(f) = replace(f, "_aligned.jld2" => "_synthesized.jld2")
-    gembfit_file(f) = gemb_physics_path(replace(synthesized_file(f), ".jld2" => "_gembfit_dv.jld2"), physics_member)
+    gembfit_file(f) = gembfit_dv_path(GVC.synthesized_path(f), physics_member)
     return (;
         filled, filled_ref,
-        synthesized=synthesized_file.(filled), synthesized_ref=synthesized_file(filled_ref),
+        synthesized=GVC.synthesized_path.(filled), synthesized_ref=GVC.synthesized_path(filled_ref),
         gembfit_dv=gembfit_file.(filled), gembfit_dv_ref=gembfit_file(filled_ref),
         surface_masks=unique(getproperty.(binned_filled_fileparts.(filled), :surface_mask)),
-        surface_mask_ref=binned_filled_fileparts(filled_ref).surface_mask,
+        surface_mask_ref=reference_surface_mask(),
     )
 end
 # The GEMB physics member (GEMB_GlacierSims `physics_member`) the reported fluxes are calibrated

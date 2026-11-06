@@ -489,8 +489,7 @@ function gemb_calibration(
     # I'm getting an "geotile volume change contains all NaNs" when run using Threads.. no clue why
     @showprogress desc = "Calibrating GEMB model to altimetry data" for binned_synthesized_file in path2runs
 
-        synthesized_gemb_fit = gemb_physics_path(replace(binned_synthesized_file, ".jld2" => "_gembfit.arrow"),
-                                                 physics_member)
+        synthesized_gemb_fit = gembfit_path(binned_synthesized_file, physics_member)
 
         if file_is_current(synthesized_gemb_fit, force_remake_before) &&
            isfile(gembfit_provenance_file(synthesized_gemb_fit)) && isnothing(single_geotile_test)
@@ -705,14 +704,10 @@ function gemb_ensemble_dv(; gemb_run_id=9, surface_mask, physics_member=nothing)
     # the `dv_gemb[:smb]` usage shown in this function's own docstring would throw a KeyError.
     dv_gemb = gemb_add_derived_vars!(dv_gemb)
 
-    member = get(gembinfo, :physics_member, nothing)
+    provenance = _gemb_ensemble_tile_provenance(gemb_geotile_filename_dv, gembinfo.tile_dir)
+    _check_gemb_physics_provenance(provenance["tile_run_parameters"], gembinfo.physics_member, gemb_geotile_filename_dv)
     metadata = Dict{String,Any}("surface_mask" => String(surface_mask), "gemb_run_id" => gemb_run_id,
-                                "gemb_physics_member" => member)
-    if haskey(gembinfo, :tile_dir)
-        provenance = _gemb_ensemble_tile_provenance(gemb_geotile_filename_dv, gembinfo.tile_dir)
-        _check_gemb_physics_provenance(provenance["tile_run_parameters"], member, gemb_geotile_filename_dv)
-        metadata["tile_provenance"] = provenance
-    end
+                                "gemb_physics_member" => gembinfo.physics_member, "tile_provenance" => provenance)
     return DD.maplayers(A -> DD.rebuild(A; metadata), dv_gemb)
 end
 
@@ -758,8 +753,7 @@ software_gemb_version = "…"
 # … every other software_* parameter the tile files record
 ```
 
-The file is written beside the output and then moved into place, so a reader never sees it half
-written. Returns its path.
+The file is written with `GVC.atomic_write`, so a reader never sees it half written. Returns its path.
 """
 function write_gembfit_provenance(gembfit_file, tile_provenance)
     tile_dir = tile_provenance["tile_dir"]
@@ -768,14 +762,12 @@ function write_gembfit_provenance(gembfit_file, tile_provenance)
     absent = [k for k in GEMB_TILE_PROVENANCE_REQUIRED if !haskey(parameters, k)]
     isempty(absent) || error("tile_provenance does not record $(join(absent, ", "))")
 
-    path = gembfit_provenance_file(gembfit_file)
-    partial = path * ".partial"
-    open(partial, "w") do io
-        TOML.print(io, Dict{String,Any}("tile_dir" => String(tile_dir),
-                                        "tile_run_parameters" => Dict{String,Any}(parameters)); sorted=true)
+    return GVC.atomic_write(gembfit_provenance_file(gembfit_file)) do scratch
+        open(scratch, "w") do io
+            TOML.print(io, Dict{String,Any}("tile_dir" => String(tile_dir),
+                                            "tile_run_parameters" => Dict{String,Any}(parameters)); sorted=true)
+        end
     end
-    mv(partial, path; force=true)
-    return path
 end
 
 """

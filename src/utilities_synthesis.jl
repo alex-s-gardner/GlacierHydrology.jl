@@ -449,8 +449,7 @@ function geotile_synthesis_gembfit_dv(path2runs, discharge::AbstractDict, gemb::
     # Load synthesized data and GEMB fit parameters
     @showprogress desc = "Computing calibrated geotile level data timeseries for all runs..." Threads.@threads for binned_synthesized_file in path2runs
 
-        binned_synthesized_dv_file = gemb_physics_path(replace(binned_synthesized_file, ".jld2" => "_gembfit_dv.jld2"),
-                                                       physics_member)
+        binned_synthesized_dv_file = gembfit_dv_path(binned_synthesized_file, physics_member)
 
         if file_is_current(binned_synthesized_dv_file, force_remake_before)
             printstyled("    -> Skipping $(binned_synthesized_dv_file) because it was created after force_remake_before: $force_remake_before\n"; color=:light_green)
@@ -458,8 +457,7 @@ function geotile_synthesis_gembfit_dv(path2runs, discharge::AbstractDict, gemb::
         else
             run_parameters = binned_filled_fileparts(binned_synthesized_file)
             surface_mask = run_parameters.surface_mask
-            gembfit_file = gemb_physics_path(replace(binned_synthesized_file, ".jld2" => "_gembfit.arrow"),
-                                             physics_member)
+            gembfit_file = gembfit_path(binned_synthesized_file, physics_member)
             _check_gemb_physics_provenance(get(TOML.parsefile(gembfit_provenance_file(gembfit_file)),
                                                "tile_run_parameters", Dict{String,Any}()),
                                            physics_member, gembfit_file)

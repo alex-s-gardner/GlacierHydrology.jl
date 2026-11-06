@@ -368,18 +368,12 @@ function wgms_seasonal_points(wgms; qc=WGMS_SEASONAL_QC)
     for grp in groupby(records, key)
         nrow(grp) == 1 && continue
         idx = parentindices(grp)[1]
-        if maximum(grp.obs) - minimum(grp.obs) <= qc.duplicate_tolerance
-            for i in idx[2:end]
-                keep[i] = false
-                push!(excluded, (records.id[i], records.glacier_id[i], records.region[i],
-                                 String(records.season[i]), "duplicate"))
-            end
-        else
-            for i in idx
-                keep[i] = false
-                push!(excluded, (records.id[i], records.glacier_id[i], records.region[i],
-                                 String(records.season[i]), "conflicting duplicate"))
-            end
+        # Agreeing duplicates keep their first record; conflicting ones are all excluded.
+        agree = maximum(grp.obs) - minimum(grp.obs) <= qc.duplicate_tolerance
+        for i in (agree ? idx[2:end] : idx)
+            keep[i] = false
+            push!(excluded, (records.id[i], records.glacier_id[i], records.region[i],
+                             String(records.season[i]), agree ? "duplicate" : "conflicting duplicate"))
         end
     end
     return (; records=records[keep, :], excluded)
@@ -1184,11 +1178,11 @@ records anchored in stake measurements, [`WGMS_ANCHORED_PROVENANCE`](@ref).
 """
 const WGMS_PROVENANCE_RESTRICTIONS = (nothing, WGMS_ANCHORED_PROVENANCE)
 
-# The (source, record_id, season) key of every matched record; unique within one validation.
-function _wgms_record_keys(v)
-    k = collect(zip(v.matched.source, v.matched.record_id, v.matched.season))
-    length(unique(k)) == length(k) ||
-        error("matched of $(only(unique(v.matched.label))) holds duplicate (source, record_id, season) keys")
+# The (source, record_id, season) key of every record of a `matched` table, which must be unique;
+# `name` labels the table in the error.
+function _wgms_record_keys(matched, name)
+    k = collect(zip(matched.source, matched.record_id, matched.season))
+    length(unique(k)) == length(k) || error("$name holds duplicate (source, record_id, season) keys")
     return k
 end
 
@@ -1210,12 +1204,12 @@ function wgms_rank_restricted(vs; restrictions=WGMS_PROVENANCE_RESTRICTIONS, min
     length(vs) >= 2 || error("ranking needs at least two configurations, got $(length(vs))")
     labels = [only(unique(v.matched.label)) for v in vs]
     length(unique(labels)) == length(labels) || error("configuration labels are not distinct: $labels")
-    record_keys = [_wgms_record_keys(v) for v in vs]
-    common = reduce(intersect, record_keys)
+    record_keys = [_wgms_record_keys(v.matched, "matched of $l") for (v, l) in zip(vs, labels)]
+    common = Set(reduce(intersect, record_keys))
     isempty(common) && error("the configurations share no matched record")
     cards = DataFrame[]
-    for v in vs
-        shared = v.matched[in.(_wgms_record_keys(v), Ref(Set(common))), :]
+    for (v, k) in zip(vs, record_keys)
+        shared = v.matched[in.(k, Ref(common)), :]
         scored = _wgms_rescore(shared)
         for r in restrictions
             push!(cards, wgms_scorecard(scored; min_n, provenance=r))
@@ -1326,11 +1320,7 @@ function _wgms_pair_members(a, b)
         absent = setdiff(need, propertynames(t))
         isempty(absent) || error("$name.matched lacks column(s) $(join(absent, ", ")); score it with wgms_validation")
     end
-    key(t) = collect(zip(t.source, t.record_id, t.season))
-    ka, kb = key(a), key(b)
-    for (name, k) in (("v_ref", ka), ("v_member", kb))
-        length(unique(k)) == length(k) || error("$name.matched holds duplicate (source, record_id, season) keys")
-    end
+    ka, kb = _wgms_record_keys(a, "v_ref.matched"), _wgms_record_keys(b, "v_member.matched")
     index_a = Dict(k => i for (i, k) in zip(eachindex(ka), ka))
     rows_a, rows_b = Int[], Int[]
     for (j, k) in zip(eachindex(kb), kb)

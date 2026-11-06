@@ -119,6 +119,19 @@ gemb_physics_path(path, physics_member::AbstractString) =
     joinpath(dirname(path), "gemb_physics", check_gemb_physics_member(physics_member), basename(path))
 
 """
+    gembfit_path(synthesized, physics_member) -> String
+    gembfit_dv_path(synthesized, physics_member) -> String
+
+The calibration (step 13, `…_synthesized_gembfit.arrow`) and the calibrated synthesis (step 14,
+`…_synthesized_gembfit_dv.jld2`) of the altimetry member `synthesized` (`…_synthesized.jld2`) against
+`physics_member`, in that member's folder ([`gemb_physics_path`](@ref)).
+"""
+gembfit_path(synthesized, physics_member) =
+    gemb_physics_path(replace(synthesized, ".jld2" => "_gembfit.arrow"), physics_member)
+gembfit_dv_path(synthesized, physics_member) =
+    gemb_physics_path(replace(synthesized, ".jld2" => "_gembfit_dv.jld2"), physics_member)
+
+"""
     gemb_physics_member_from_path(path) -> String or nothing
 
 The physics member whose folder (`gemb_physics/<member>/`, [`gemb_physics_path`](@ref)) holds `path`,
@@ -165,7 +178,7 @@ function gembfit_dv_files(path2runs_synthesized, physics_members)
     runs = collect(String, path2runs_synthesized)
     all(endswith("_synthesized.jld2"), runs) ||
         error("expected `…_synthesized.jld2` altimetry members, got $(join(filter(!endswith("_synthesized.jld2"), runs), ", "))")
-    files = [gemb_physics_path(replace(r, ".jld2" => "_gembfit_dv.jld2"), m) for r in runs, m in members]
+    files = [gembfit_dv_path(r, m) for r in runs, m in members]
     return DimArray(files, (Dim{:run}(runs), Dim{:physics}(members)))
 end
 

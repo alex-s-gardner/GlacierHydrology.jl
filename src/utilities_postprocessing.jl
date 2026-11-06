@@ -132,7 +132,7 @@ function runs2rgi(path2runs; physics_member=gemb_reference_physics_member, vars2
 
     regional_sum = Dict() # this needs to be a Dict since variables have different date dimensions
 
-    gembfit_dv_file(path) = gemb_physics_path(replace(path, ".jld2" => "_gembfit_dv.jld2"), physics_member)
+    gembfit_dv_file(path) = gembfit_dv_path(path, physics_member)
     example_data = FileIO.load(gembfit_dv_file(path2runs[1]), "geotiles")
     for varname in vars2sum
         ddate = Dim{:date}(colmetadata(example_data, varname, "date"))
@@ -157,10 +157,8 @@ function runs2rgi(path2runs; physics_member=gemb_reference_physics_member, vars2
             geotiles0 = geotiles0[.!no_altim, :]
         end
 
-        for varname in vars2sum
-            factor = _regional_unit_factor(geotiles0, varname, binned_synthesized_dv_file)
-            geotiles0[!, varname] = [v .* factor for v in geotiles0[!, varname]]
-        end
+        # One factor per column, applied to the regional sums below
+        factor = Dict(v => _regional_unit_factor(geotiles0, v, binned_synthesized_dv_file) for v in vars2sum)
 
         # group by rgi and sum
         geotiles_reg = groupby(geotiles0, :rgiid)
@@ -182,7 +180,7 @@ function runs2rgi(path2runs; physics_member=gemb_reference_physics_member, vars2
 
         for varname in vars2sum
             # reduce all region time series vectors to a matrix
-            regional_sum[varname][At(binned_synthesized_file), At(regions0.rgiid), :] = reduce(hcat, regions0[!, varname])'
+            regional_sum[varname][At(binned_synthesized_file), At(regions0.rgiid), :] = reduce(hcat, regions0[!, varname])' .* factor[varname]
         end
     end
 
