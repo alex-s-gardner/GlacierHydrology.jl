@@ -22,6 +22,7 @@ FlexiJoins = "e37f2e79-19fa-4eb7-8510-b63b51fe0a37"
 GeoDataFrames = "62cb38b5-d8d2-4862-a48e-6a340996859f"
 GeoFormatTypes = "68eda718-8dee-11e9-39e7-89f7f65f511f"
 GeoInterface = "cf35fbd7-0cd7-5166-be24-54bfbe79505f"
+GeoTiles = "2d466ccc-baa7-41f7-823f-6e09e7c71845"
 GeometryBasics = "5c1252a2-5f33-56bf-86c9-59e7332b4326"
 GeometryOps = "3251bfac-6a57-4b6d-aa61-ac1fef2975ab"
 GeometryOpsCore = "05efe853-fabf-41c8-927e-7063c8b9f013"
@@ -49,6 +50,7 @@ Unitful = "1986cc42-f94f-5a68-af5c-568840ba703d"
 
 [sources]
 BinStatistics = {rev = "main", url = "https://github.com/alex-s-gardner/BinStatistics.jl"}
+GeoTiles = {rev = "main", url = "https://github.com/alex-s-gardner/GeoTiles.jl"}
 GlacierVolumeChange = {rev = "main", url = "https://github.com/alex-s-gardner/GlacierVolumeChange.jl"}
 
 [compat]
@@ -57,6 +59,7 @@ CairoMakie = "0.15"
 DataFrames = "1.8"
 DimensionalData = "0.29"
 GeoInterface = "1.4"
+GeoTiles = "1.1"
 GeometryBasics = "0.5"
 GlacierVolumeChange = "0.1"
 GeometryOps = "0.1"
