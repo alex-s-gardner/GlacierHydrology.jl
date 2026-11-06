@@ -37,7 +37,8 @@ using Dates
     discharge_gtyr = 0.0625 .* k
     area_total = 10.0 .+ k
 
-    ddate = Dim{:date}(Date(2000, 1, 15):Month(1):Date(2004, 12, 15))
+    _, date_center = GlacierHydrology.GVC.project_date_bins()
+    ddate = Dim{:date}(date_center[123:183])
     Δt = GlacierHydrology.decimalyear.(ddate) .- GlacierHydrology.decimalyear(first(ddate))
     dgeotile = Dim{:geotile}(ids)
     dheight = Dim{:height}(1050.0:100.0:1450.0)
@@ -67,7 +68,7 @@ using Dates
 
     mktempdir() do dir
         run = joinpath(dir, "glacier_dh_best_nmad5_v01_filled_ac_p1_synthesized.jld2")
-        GlacierHydrology.FileIO.save(run, Dict("dh_hyps" => zeros(dgeotile, ddate, dheight)))
+        write_mock_volume_product(run, zeros(dgeotile, ddate), area_km2)
         out = GlacierHydrology.individual_geotile_synthesis_gembfit_dv(run, gemb, gemb_fit, discharge, geotiles0, area_km2)
         GlacierHydrology.FileIO.save(replace(run, ".jld2" => "_gembfit_dv.jld2"), Dict("geotiles" => out))
 

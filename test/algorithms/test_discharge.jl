@@ -33,16 +33,16 @@ using DataFrames
         D = 4.0 # Gt/yr
         id = "lat[+60+62]lon[-142-140]"
         dgeotile = Dim{:geotile}([id])
-        ddate = Dim{:date}(Date(2000, 1, 15):Month(1):Date(2001, 12, 15))
+        _, date_center = GlacierHydrology.GVC.project_date_bins()
+        ddate = Dim{:date}(date_center[123:146])
         dheight = Dim{:height}(50.0:100.0:450.0)
         dpscale = Dim{:pscale}([1.0, 2.0])
         dΔT = Dim{:ΔT}([0.0, 1.0])
 
         mktempdir() do temp_dir
-            binned_synthesized_file = joinpath(temp_dir, "synthesized.jld2")
-            GlacierHydrology.FileIO.save(binned_synthesized_file, Dict("dh_hyps" => zeros(dgeotile, ddate, dheight)))
-
+            binned_synthesized_file = joinpath(temp_dir, "glacier_dh_best_nmad5_v01_filled_ac_p1_synthesized.jld2")
             area_km2 = DimArray(fill(2.0, 1, length(dheight)), (dgeotile, dheight))
+            write_mock_volume_product(binned_synthesized_file, zeros(dgeotile, ddate), area_km2)
             gemb = DimStack((; smb=zeros(dgeotile, ddate, dpscale, dΔT), dv=zeros(dgeotile, ddate, dpscale, dΔT),
                                 fac=zeros(dgeotile, ddate, dpscale, dΔT)))
             gemb_fit = DataFrame(id=[id], pscale=[1.0], ΔT=[0.0], group=[1])
