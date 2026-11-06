@@ -39,11 +39,12 @@ begin
 
     gembinfo = GlacierHydrology.gemb_info(; gemb_run_id, physics_member=gemb_physics_member)
 
-    # Date bins: the calendar months of `GVC.project_date_bins`, labelled on the 15th, extended back to
-    # 1970. Every altimetry bin then has a GEMB bin with the same label, which `gemb_calibration` requires.
+    # Date bins: the 30-day bins of `GVC.project_date_bins`, extended back to 1970 on the same edges.
+    # Every altimetry bin then has a GEMB bin with the same label, which `gemb_calibration` requires.
     date_range, _ = GVC.project_date_bins()
-    date_range = Date(1970, 1, 1):Month(1):last(date_range)
-    date_center = collect(date_range[1:end-1]) .+ Day(14)
+    Δd = 30
+    date_range = reverse(last(date_range):-Day(Δd):Date(1970, 1, 1))
+    date_center = date_range[1:end-1] .+ Day(Δd / 2)
 
     length(date_range) == length(date_center) + 1 ||
         error("date_range and date_center lengths are inconsistent")

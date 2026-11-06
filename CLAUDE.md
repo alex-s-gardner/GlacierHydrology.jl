@@ -74,7 +74,7 @@ Scripts load the package with `import GlacierHydrology` and qualify every name
   - `gemb_calibration` throws when they would be applied to another run. Re-derive all three from that
     run's unpenalized fits (`distance_from_origin_penalty = 0`) and update them together.
   - The method record is `notes/methods_2026-10_seasonal_cycle_and_calibration.md`.
-- **Dates:** GEMB is binned on the calendar months of `GVC.project_date_bins`, labelled on the 15th, as the
+- **Dates:** GEMB is binned on the 30-day bins of `GVC.project_date_bins`, extended back to 1970, as the
   altimetry is. `gemb_calibration` throws if the two date axes differ over their common span.
 - **Freshness:** steps 12–14 rebuild any file older than the GEMB ensemble they descend from
   (`gemb_ensemble_built`). `file_is_current` compares modification times in UTC.
