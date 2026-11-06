@@ -86,8 +86,8 @@ const gemb_pilot_gradient_forcing_grid = (; pscale=[0.75, 1.0, 1.5, 2.0, 3.0],
 Configuration of a GEMB_GlacierSims tile sweep.
 
 # Arguments
-- `gemb_run_id::Int`: 9, the production sweep in `$CLIMATE_CACHE/tile_runs_v2`, or 10, the pilot sweep
-  in `$CLIMATE_CACHE/tile_runs_pilot` on its own forcing grid and tile subset.
+- `gemb_run_id::Int`: 9, the production sweep in `\$CLIMATE_CACHE/tile_runs_v2`, or 10, the pilot sweep
+  in `\$CLIMATE_CACHE/tile_runs_pilot` on its own forcing grid and tile subset.
 - `physics_member`: the GEMB_GlacierSims physics member (e.g. `"S-kfit-table"`, see
   [`gemb_reference_physics_member`](@ref)). Each run holds one tile sweep per member, under
   `<tile_dir>/<tile member>`, with a combined file of its own, so no tile of another member or sweep can
