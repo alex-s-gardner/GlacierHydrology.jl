@@ -698,13 +698,29 @@ function _geotile_load_align(; surface_mask="glacier", geotile_width=2, geotile_
 end
 
 """
-    ts_seasonal_model(ts, interval)
+    seasonal_design(dates) -> (; dates, F)
+
+The least-squares factorization of the seasonal model of [`ts_seasonal_model`](@ref) on `dates`, for
+fitting many series on one date axis: `F` is the pivoted QR factorization of its design matrix, which
+`M \\ y` would compute on every call.
+"""
+function seasonal_design(dates)
+    decyear = decimalyear.(collect(dates))
+    decyear = decyear .- round(mean(decyear))
+    M = hcat(ones(length(decyear)), decyear, cos.(2π .* decyear), sin.(2π .* decyear))
+    return (; dates=collect(dates), F=qr(M, ColumnNorm()))
+end
+
+"""
+    ts_seasonal_model(ts; interval=nothing, design=nothing)
 
 Fit a simple seasonal model to a time series and extract the amplitude and phase of the seasonal cycle.
 
 # Arguments
 - `ts`: A DimArray or similar time series object with a :date or :time dimension.
 - `interval`: A tuple of two DateTime objects specifying the interval over which to fit the model.
+- `design`: a [`seasonal_design`](@ref) of `ts`'s whole date axis, reused across calls; it cannot be
+  combined with `interval`, and throws if its dates are not `ts`'s.
 
 # Returns
 - `amplitude`: The amplitude of the seasonal (annual) cycle.
@@ -716,7 +732,7 @@ Fits a model of the form:
 to the time series over the specified interval, where t is in decimal years (centered).
 Returns the amplitude and the month of the seasonal peak.
 """
-function ts_seasonal_model(ts; interval=nothing)
+function ts_seasonal_model(ts; interval=nothing, design=nothing)
     if hasdim(ts, :date)
         ddate = dims(ts, :date)
     elseif hasdim(ts, :time)
@@ -725,19 +741,18 @@ function ts_seasonal_model(ts; interval=nothing)
         error("ts has no :date or :Ti dimension")
     end
 
-    if isnothing(interval)
-        interval = (minimum(ddate), maximum(ddate))
+    if isnothing(design)
+        isnothing(interval) && (interval = (minimum(ddate), maximum(ddate)))
+        design = seasonal_design(parent(values(ddate[interval[1]..interval[2]])))
+        y = ts[interval[1]..interval[2]]
+    else
+        isnothing(interval) || throw(ArgumentError("ts_seasonal_model: pass interval or design, not both"))
+        val(ddate) == design.dates || error("ts_seasonal_model: design was built on other dates than ts's")
+        y = ts
     end
 
-    decyear = decimalyear.(parent(values(ddate[interval[1]..interval[2]])))
-    decyear = decyear .- round(mean(decyear))
-
-    # construct design matrix
-    n = length(decyear)
-    M = hcat(ones(n), decyear, cos.(2π .* decyear), sin.(2π .* decyear))
-
     # fit seasonal model
-    p = M \ ts[interval[1]..interval[2]]
+    p = design.F \ parent(y)
 
     amplitude = sqrt(p[3]^2 + p[4]^2)
 

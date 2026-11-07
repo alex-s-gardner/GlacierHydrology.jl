@@ -147,7 +147,9 @@ function gemb_bestfit_grouped(dv_altim, dv_gemb, geotiles0;
         ΔT0 = zeros(length(groups_unique));
  
         Threads.@threads for i in 1:length(groups_unique)
-            f2 = Base.Fix{2}(Base.Fix{3}(Base.Fix{4}(gemb_altim_cost, kwargs2), dv_gemb0[i]), dv_altim0[i])
+            # The seasonal factorization and the interpolant are the same at every forcing node.
+            kw = (; kwargs2..., design=seasonal_design(val(dims(dv_altim0[i], :date))))
+            f2 = Base.Fix{2}(Base.Fix{3}(Base.Fix{4}(gemb_altim_cost, kw), GEMBSampler(dv_gemb0[i])), dv_altim0[i])
             (pscale0[i], ΔT0[i]) = _gemb_grid_minimize(f2, val(dpscale_search), val(dΔT_search))
         end
 
@@ -790,6 +792,23 @@ function gemb_add_derived_vars!(dv_gemb)
 end
 
 """
+    GEMBSampler(dv_gemb)
+
+The interpolant [`gemb_dv_sample`](@ref) samples `dv_gemb` (date, pscale, ΔT) with, built once for a
+caller that samples one ensemble at many forcing corrections, as the calibration's grid search does.
+"""
+struct GEMBSampler{I,D}
+    itp::I
+    ddate::D
+end
+function GEMBSampler(dv_gemb)
+    ddate = dims(dv_gemb, :date)
+    itp = Interpolations.interpolate((eachindex(ddate), val(dims(dv_gemb, :pscale)), val(dims(dv_gemb, :ΔT))),
+                                     parent(dv_gemb), (NoInterp(), Gridded(Linear()), Gridded(Linear())))
+    return GEMBSampler(itp, ddate)
+end
+
+"""
     gemb_dv_sample(pscale, ΔT, dv_gemb)
 
 Sample GEMB volume change at a single (pscale, ΔT) by linear interpolation.
@@ -797,7 +816,7 @@ Sample GEMB volume change at a single (pscale, ΔT) by linear interpolation.
 # Arguments
 - `pscale`: Precipitation scaling factor
 - `ΔT`: Air temperature offset applied to the GEMB forcing (K)
-- `dv_gemb`: DimArray with dimensions (date, pscale, ΔT)
+- `dv_gemb`: DimArray with dimensions (date, pscale, ΔT), or its [`GEMBSampler`](@ref)
 
 # Returns
 - DimArray of volume change with dimension :date only.
@@ -807,17 +826,8 @@ Sample GEMB volume change at a single (pscale, ΔT) by linear interpolation.
 julia> dv_sampled = gemb_dv_sample(1.0, 0.0, dv_gemb)
 ```
 """
-function gemb_dv_sample(pscale, ΔT, dv_gemb)
-
-    ddate = dims(dv_gemb, :date)
-    dpscale = dims(dv_gemb, :pscale)
-    dΔT = dims(dv_gemb, :ΔT)
-
-    itp = Interpolations.interpolate((eachindex(ddate), dpscale.val, dΔT.val), dv_gemb.data, (NoInterp(), Gridded(Linear()), Gridded(Linear())))
-    gemb_dv_out = DimArray(itp.(eachindex(ddate), Ref(pscale), Ref(ΔT)),ddate)
-
-    return gemb_dv_out  
-end
+gemb_dv_sample(pscale, ΔT, dv_gemb) = gemb_dv_sample(pscale, ΔT, GEMBSampler(dv_gemb))
+gemb_dv_sample(pscale, ΔT, s::GEMBSampler) = DimArray(s.itp.(eachindex(s.ddate), Ref(pscale), Ref(ΔT)), s.ddate)
 
 
 

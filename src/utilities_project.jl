@@ -222,6 +222,8 @@ Compute a composite cost function for fitting a model to altimetry data, incorpo
   distance of (log pscale, ΔT) from `forcing_prior`, i.e. the distance in prior standard deviations
   allowing for the correlation between the two. `:legacy` multiplies it by `1 + wd * d`, `d` the weighted
   distance from the no-op point (1, 0).
+- `design`: a [`seasonal_design`](@ref) of `res`'s dates, which a caller evaluating many residuals on
+  one date axis builds once; `nothing` builds it here.
 - `forcing_prior`: `(; pscale, log_pscale_sd, ΔT, ΔT_sd, corr)`, the centre, spreads and correlation used
   by `origin_penalty_mode = :prior`, or `nothing`, which only a zero `distance_from_origin_penalty`
   accepts.
@@ -243,13 +245,13 @@ A tuple `cost` where:
 julia> cost = model_fit_cost_function(res, 1.0, 0.0; seasonality_weight=0.85, distance_from_origin_penalty=0.35, ΔT_to_pscale_weight=0.5)
 ```
 """
-function model_fit_cost_function(res, pscale, ΔT; seasonality_weight, distance_from_origin_penalty, ΔT_to_pscale_weight, calibrate_to=:all, is_scaling_factor=Dict("pscale" => true, "ΔT" => false), origin_penalty_mode=:prior, forcing_prior=nothing)
+function model_fit_cost_function(res, pscale, ΔT; seasonality_weight, distance_from_origin_penalty, ΔT_to_pscale_weight, calibrate_to=:all, is_scaling_factor=Dict("pscale" => true, "ΔT" => false), origin_penalty_mode=:prior, forcing_prior=nothing, design=nothing)
 
     origin_penalty_mode in (:legacy, :prior) || error("origin_penalty_mode must be :legacy or :prior, got $origin_penalty_mode")
 
     # remove linear trend to emphasize seasonality
     if calibrate_to != :five_year
-        fit = ts_seasonal_model(res; interval=nothing);
+        fit = ts_seasonal_model(res; design);
     else
         res0 = groupby(res, :date => Bins(year, 5))
         res0 = mean.(res0)
