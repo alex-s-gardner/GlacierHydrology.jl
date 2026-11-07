@@ -1,8 +1,8 @@
 using Test
-using GlobalGlacierAnalysis
-import GlobalGlacierAnalysis as GGA
+using GlacierHydrology
+import GlacierHydrology
 
-@testset "GlobalGlacierAnalysis.jl Tests" begin
+@testset "GlacierHydrology.jl Tests" begin
     # Include test helpers
     include("test_helpers.jl")
 
@@ -15,8 +15,13 @@ import GlobalGlacierAnalysis as GGA
     # Algorithm tests - Complex operations with synthetic data
     @testset "Algorithm Tests" begin
         include("algorithms/test_gemb.jl")
+        include("algorithms/test_gemb_tiles.jl")
+        include("algorithms/test_gemb_physics.jl")
         include("algorithms/test_routing.jl")
+        include("algorithms/test_discharge.jl")
         include("algorithms/test_postprocessing.jl")
+        include("algorithms/test_regional_units.jl")
+        include("algorithms/test_wgms.jl")
     end
 
     # I/O tests - Data persistence and round-trip

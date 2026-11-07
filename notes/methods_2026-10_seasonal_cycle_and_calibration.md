@@ -186,3 +186,49 @@ the combined effect of items 2–4. Trends 2000-03 to 2024-12, reference member 
 - `runs2rgi` leaves out geotiles with no altimetry at any date (sub-km² ice fragments GEMB covers but the
   binning drops; five, 0.18 km² in total, in the RGI6-mask members); they previously made RGI 8, 10, 11,
   19 and the global sum NaN in those members. It errors if such geotiles hold ≥ 1 km² of glacier.
+
+## 8. GEMB pipeline physics corrections (not yet in any run)
+
+Status: implemented on local branches (GEMB.jl `fix/physics-audit`, GEMB_ClimateForcing
+`fix/forcing-audit`, GEMB_GlacierSims `fix/pipeline-audit`, GGA `fix/gemb-audit`), each with
+analytical tests; none merged and no GEMB run uses them. Every GEMB number above (run 8) predates them.
+The review behind them, with evidence and magnitudes, is `gemb_pipeline_review_2026-10-13.md`. Once a
+run uses them, the Extended Methods must describe the model as follows, with before/after calibration
+numbers added here:
+
+- **Surface energy balance.** The surface absorbs `ε·LW↓`; upward longwave is emitted plus reflected
+  (`known_issue_gemb_longwave_absorption.md`). Stable and unstable turbulent fluxes come from
+  Monin–Obukhov similarity with Beljaars–Holtslag (stable) and Paulson (unstable) functions, solved for
+  the Obukhov length by four fixed Newton steps from the bulk Richardson number at consistent
+  measurement heights. There is no pressure (Exner) factor on the sensible flux. Vapor is exchanged in
+  the phase whose latent heat is charged (liquid at L_v at a wet surface, ice at L_s otherwise). A cell
+  holding liquid water stays at 0 °C in the thermal solve until that water has refrozen. The explicit
+  sub-step is also bounded by the surface-cell relaxation time. Ice saturation vapor pressure is Murphy
+  & Koop (2005).
+- **Albedo and shortwave.** Exposed ice takes the band's MODIS bare-ice albedo (`albedo_ice`) exactly;
+  firn is linear between it and 0.65; snow thinner than 10 cm blends linearly toward the surface below.
+  Solar zenith angle is the SW-weighted mean over each forcing hour from solar geometry (Meeus 1991 as in
+  NOAA's calculator). The diffuse fraction comes from the clearness index (Erbs et al. 1982), and cloud
+  optical thickness from inverting t = 1/(1 + 0.13τ) (Lacis & Hansen 1974) against the FAO-56 clear-sky
+  transmissivity, capped at 100. The Lacis & Hansen coefficient was not checked against the paper. Every
+  shortwave branch absorbs `(1−α)(SW−SW_d) + (1−α_d)·SW_d`.
+- **Mass.** Rain enters the surface cell's pore water, with its sensible heat added to the matrix, so it
+  does not change snow density; rain that freezes is counted as refreeze. Dry surface snow grows by
+  Marbouty and firn by Arthern (`:hybrid`).
+- **Downscaling.** The fitted lapse rate is the ambient (ice-free) slope. Each reanalysis cell is brought
+  to the ice-free state with the decoupling fit's mixing model `E_obs = [1 − glm·(1 − k)]·E_ambient`,
+  lapsed, then decoupled with the band's full k, so k is applied once. The decoupling fit uses only cells
+  above melting. Decoupling leaves LW↓ unchanged and caps vapor pressure at saturation of the cooled
+  air. Humidity uses one saturation curve, the IFS curve over water that defines ERA5 dewpoint, and
+  temperature and elevation adjustments hold e/e_s(T), so ΔT = 0 and Δz = 0 leave the forcing exactly
+  unchanged.
+- **Spin-up.** The ceiling is 500 years. Unconverged columns warn and are counted (number and glacier
+  area) in each tile file; they do not fail the run.
+- **Calibration.** GEMB is weighted by the same glacier mask (RGI6 or RGI7) as the altimetry it is
+  calibrated against. The perturbation grid adds pscale 2, 2.5 and 3. Fits pinned at a grid bound are
+  labelled and warned about.
+- **Discharge.** The geotile discharge term is converted from mass to volume once, and Antarctic
+  SMB-derived discharge is converted to Gt with δice (Antarctic total 110.6 → 101.4 Gt/yr on the current
+  discharge file).
+- **Limitations kept.** Snowfall below the minimum cell thickness resets the surface cell's grain
+  properties. The bare-ice albedo product is the darkest 5 % of retrievals.

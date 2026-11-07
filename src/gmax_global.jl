@@ -17,7 +17,7 @@ begin
     using NCDatasets
     using GeoDataFrames
     using DimensionalData
-    import GlobalGlacierAnalysis as GGA
+    import GlacierHydrology
     using Dates
     using Statistics
     import GeometryOps as GO
@@ -29,18 +29,19 @@ begin
 
     dates4trend = [DateTime(2000, 3, 1), DateTime(2024, 10, 01)] # last day of river flux sata  = DateTime(2024, 10, 01)
 
-    paths = GGA.pathlocal
+    paths = GlacierHydrology.pathlocal
 
-    glacier_summary_file = GGA.pathlocal[:glacier_summary]
+    glacier_summary_file = GlacierHydrology.pathlocal[:glacier_summary]
     glacier_summary_riverflux_file = replace(glacier_summary_file, ".nc" => "_riverflux.nc")
     glacier_summary_gmax_file = replace(glacier_summary_file, ".nc" => "_gmax.gpkg")
 
-    glacier_rivers_land_flux_path = joinpath(paths[:river], "riv_pfaf_MERIT_Hydro_v07_Basins_v01_glacier_Qs_acc_Qsb_acc.nc")
-    glacier_rivers_snow_flux_path = joinpath(paths[:river], "riv_pfaf_MERIT_Hydro_v07_Basins_v01_glacier_Qsm_acc.nc")
+    surface_mask = GlacierHydrology.reference_surface_mask()
+    glacier_rivers_path = GlacierHydrology.glacier_rivers_file(surface_mask)
+    glacier_rivers_land_flux_path = replace(glacier_rivers_path, ".arrow" => "_Qs_acc_Qsb_acc.nc")
+    glacier_rivers_snow_flux_path = replace(glacier_rivers_path, ".arrow" => "_Qsm_acc.nc")
 
-    path2discharge = joinpath(paths[:data_dir], "GlacierOutlines/GlacierDischarge/global_glacier_discharge.jld2")
-    rivers_paths = GGA.allfiles(paths[:river]; fn_endswith="MERIT_Hydro_v07_Basins_v01.shp", fn_startswith="riv_pfaf")
-    glacier_rivers_path = joinpath(paths[:river], "riv_pfaf_MERIT_Hydro_v07_Basins_v01_glacier.arrow")
+    path2discharge = GlacierHydrology.discharge_global_file(surface_mask)
+    rivers_paths = GlacierHydrology.allfiles(paths[:river]; fn_endswith="MERIT_Hydro_v07_Basins_v01.shp", fn_startswith="riv_pfaf")
 
    
     SECONDS_PER_DAY = 86400
@@ -64,8 +65,8 @@ end
     river_flux_nc = NCDataset(glacier_rivers_land_flux_path)
 
     # convert to DimensionalData
-    glacier_runoff = GGA.nc2dd(glacier_flux_nc["runoff"]) / (1000 * u"kg/m^3")
-    river_flux = GGA.nc2dd(river_flux_nc["flux"])
+    glacier_runoff = GlacierHydrology.nc2dd(glacier_flux_nc["runoff"]) / (1000 * u"kg/m^3")
+    river_flux = GlacierHydrology.nc2dd(river_flux_nc["flux"])
    
     # having issues with sortslices
     #@time glacier_flux = sortslices(glacier_flux, dims=:COMID)
@@ -182,7 +183,7 @@ end
         index_gmax = (river_gmax_gt_50 .>= min_count) .& (river_gmax_gt_50 .<= max_count)
 
         pts = GO.centroid.(rivers.geometry)
-        ext = GGA.extent2rectangle(Extent(X = (-140, -120), Y = (50, 60)))
+        ext = GlacierHydrology.extent2rectangle(Extent(X = (-140, -120), Y = (50, 60)))
         index_spatial = GO.intersects.(pts, Ref(ext)) .& index_gmax
 
         index0 = index_spatial .& index_gmax

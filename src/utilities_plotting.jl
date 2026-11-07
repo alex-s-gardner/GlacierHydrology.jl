@@ -541,53 +541,6 @@ function show_error_bar_table(regional_results; cols2display=3)
 end
 
 
-"""
-    plot_dh_gemb_ensemble(gemb_dv, area_km2; geotile = "", title_prefix = "")
-
-Plot area-normalized height change ensemble results from GEMB model diagnostics.
-
-# Arguments
-- `gemb_dv`: Dictionary or NamedTuple of GEMB diagnostic variables, each as a DimArray with `:pscale` and `:ΔT` dimensions.
-- `area_km2`: DimArray or array representing the area (in km²) for normalization.
-- `geotile`: (Optional) String identifier for the geotile being plotted (used in plot titles).
-- `title_prefix`: (Optional) String prefix for plot titles.
-
-# Returns
-- `figures`: Dictionary mapping each variable name to its corresponding Makie figure.
-
-Each figure shows the area-normalized height change for every combination of precipitation scaling
-(`pscale`) and air temperature offset (`ΔT`, in K), with a legend indicating the parameter pair.
-"""
-function plot_dh_gemb_ensemble(gemb_dv, area_km2; geotile = "", title_prefix="")
-    area_total = sum(parent(area_km2))
-    vars2plot = keys(gemb_dv)
-    dpscale = dims(gemb_dv[first(vars2plot)], :pscale)
-    dΔT = dims(gemb_dv[first(vars2plot)], :ΔT)
-    clrs = Makie.resample_cmap(:thermal, length(dpscale) * length(dΔT) + 1)
-    figures = Dict()
-
-    for var0 in vars2plot
-        figures[var0] = _publication_figure(columns=1, rows=1)
-        title = "$(title_prefix) $(var0)-$(geotile)"
-        ax = CairoMakie.Axis(figures[var0][1, 1]; title)
-        ax.ytickformat = values -> ["$(round(Int,value))m" for value in values]
-
-        cnt = 1
-        for pscale in dpscale
-            for ΔT in dΔT
-                dh = gemb_dv[var0][pscale=At(pscale), ΔT=At(ΔT)] ./ area_total
-                height_range, = validrange(.!isnan.(dh))
-                lines!(ax, dh[height_range]; label="p:$(pscale) ΔT:$(ΔT)K", color=clrs[cnt])
-                cnt += 1
-            end
-        end
-
-        axislegend(ax, position=:lt, patchsize=(20.0f0, 1.0f0), padding=(5.0f0, 5.0f0, 5.0f0, 5.0f0), labelsize=12, rowgap=1) # orientation=:horizontal, framevisible=false)
-    end
-
-    return figures
-end
-
 
 
 """
@@ -715,12 +668,19 @@ function plot_point_location_river_flux(land_flux, glacier_flux, snow_flux; date
 end
 
 
-function plot_ref_pscale_ΔT_summary(path2runs_synthesized, binned_synthesized_dv_file_ref; rgi2plot=[99], seasonality_weight=seasonality_weight, distance_from_origin_penalty=distance_from_origin_penalty, ΔT_to_pscale_weight=ΔT_to_pscale_weight, show_title=true, bin_width=0.25)
+"""
+    plot_ref_pscale_ΔT_summary(path2runs_synthesized, ensemble_reference_file, physics_member;
+                               rgi2plot=[99], seasonality_weight, distance_from_origin_penalty,
+                               ΔT_to_pscale_weight, show_title=true, bin_width=0.25)
 
-    ensemble_reference_file = replace(binned_synthesized_dv_file_ref, "_gembfit_dv.jld2" => ".jld2")
+Regional summary and the distribution of the fitted `pscale` and `ΔT` of the reference altimetry member
+(`ensemble_reference_file`, a `…_synthesized.jld2`) calibrated against `physics_member`. The weights only
+label the title.
+"""
+function plot_ref_pscale_ΔT_summary(path2runs_synthesized, ensemble_reference_file, physics_member; rgi2plot=[99], seasonality_weight=seasonality_weight, distance_from_origin_penalty, ΔT_to_pscale_weight=ΔT_to_pscale_weight, show_title=true, bin_width=0.25)
 
-    region_fits = ensemble_summary(path2runs_synthesized, ensemble_reference_file;)
-    gemb_fit = GeoDataFrames.read(replace(ensemble_reference_file, ".jld2" => "_gembfit.arrow"))
+    region_fits = ensemble_summary(path2runs_synthesized, ensemble_reference_file; physics_member)
+    gemb_fit = GeoDataFrames.read(gembfit_path(ensemble_reference_file, physics_member))
 
     title1 = "W_s: $(seasonality_weight), W_d: $(distance_from_origin_penalty), W_m2p: $(ΔT_to_pscale_weight)"
 
@@ -775,10 +735,10 @@ function plot_ref_pscale_ΔT_summary(path2runs_synthesized, binned_synthesized_d
 end
 
 
-function plot_ensemble_rgi_timeseries(vars2plot, path2runs_synthesized; center_on_dates=DateTime(2002, 5, 1):Month(1):DateTime(2005, 12, 15), rgi2plot=nothing)
+function plot_ensemble_rgi_timeseries(vars2plot, path2runs_synthesized; center_on_dates=DateTime(2002, 5, 1):Month(1):DateTime(2005, 12, 15), rgi2plot=nothing, physics_member=gemb_reference_physics_member)
 
     # load results for all runs for each RGI [18s]
-    runs_rgi = runs2rgi(path2runs_synthesized)
+    runs_rgi = runs2rgi(path2runs_synthesized; physics_member)
 
     dvarname = Dim{:varname}(vars2plot)
 

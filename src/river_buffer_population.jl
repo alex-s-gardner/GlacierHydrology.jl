@@ -24,7 +24,7 @@ begin
     progress = true
 
     using ProgressMeter
-    import GlobalGlacierAnalysis as GGA
+    import GlacierHydrology
     import GeoFormatTypes as GFT
     using Proj
     import GeometryOps as GO
@@ -42,29 +42,26 @@ begin
     using GeometryBasics
     using DimensionalData.Lookups
     import DimensionalData as DD
-    using Colors
     using BinStatistics
     using LibGEOS # was not able to use GeometryOps for union
     #using Tyler
     using Extents
-    using StaticArrays
     using Downloads
     using NCDatasets
     using Unitful
     using Dates
     using ColorSchemes
-    using Format
     # Load local configuration paths
-    paths = GGA.pathlocal
+    paths = GlacierHydrology.pathlocal
 
     # exclude rivers at high latitudes and near the dateline when calculating population
     latlim = 85.0
 
     # path to flux data
     rivers_path = joinpath(paths.data_dir, "rivers/MERIT_Hydro_v07_Basins_v01")
-    glacier_rivers_path = joinpath(rivers_path, "riv_pfaf_MERIT_Hydro_v07_Basins_v01_glacier.arrow")
+    glacier_rivers_path = GlacierHydrology.glacier_rivers_file(GlacierHydrology.reference_surface_mask())
 
-    glacier_summary_file = GGA.pathlocal[:glacier_summary]
+    glacier_summary_file = GlacierHydrology.pathlocal[:glacier_summary]
     glacier_summary_gmax_file = replace(glacier_summary_file, ".nc" => "_gmax.gpkg")
 
     population_file = joinpath(paths[:project_dir], "Gardner2025_gmax_buffer_population.nc")
@@ -155,16 +152,16 @@ if !isfile(population_file) || (unix2datetime(mtime(population_file)) < unix2dat
 
     
     # 94s for all countires, gmax = 50, buffer_radii = 30km
-    @time population = GGA.compute_population(gpw_ras, rivers, country_polygons, gmax, runoff, buffer_radii; progress=true)
+    @time population = GlacierHydrology.compute_population(gpw_ras, rivers, country_polygons, gmax, runoff, buffer_radii; progress=true)
 
     name = "population"
     global_attributes = Dict(
         "title" => "population living within a given buffer distance of a river with a gmax and glacier runoff thresholds",
         "version" => "final - " * Dates.format(now(), "yyyy-mm-dd"),
         )
-    fn = GGA.dimarray2netcdf(population, population_file; name, units=nothing, global_attributes)
+    fn = GlacierHydrology.dimarray2netcdf(population, population_file; name, units=nothing, global_attributes)
 else
-    population = GGA.netcdf2dimarray(population_file; varname=nothing)
+    population = GlacierHydrology.netcdf2dimarray(population_file; varname=nothing)
 end
 
 begin

@@ -14,11 +14,10 @@
 # concentration time parameter following Getirana et al. (2012).
 
 begin
-    import GlobalGlacierAnalysis as GGA
+    import GlacierHydrology
     import GlacierVolumeChange as GVC
     using NCDatasets
     using Rasters
-    using Arrow
     using DataFrames
     import GeoInterface as GI
     using CairoMakie
@@ -43,17 +42,18 @@ begin
     #grid resolution
     grid_res = 1.
 
-    paths = GGA.pathlocal
+    paths = GlacierHydrology.pathlocal
     rivers_path = joinpath(paths[:river])
-    rivers_paths = GGA.allfiles(rivers_path; fn_startswith="riv_pfaf", fn_endswith= "MERIT_Hydro_v07_Basins_v01.shp")
-    basins_paths = GGA.allfiles(rivers_path; fn_startswith="cat_pfaf", fn_endswith=".shp")
-    glacier_rivers_path = joinpath(rivers_path, "riv_pfaf_MERIT_Hydro_v07_Basins_v01_glacier.arrow")
+    rivers_paths = GlacierHydrology.allfiles(rivers_path; fn_startswith="riv_pfaf", fn_endswith= "MERIT_Hydro_v07_Basins_v01.shp")
+    basins_paths = GlacierHydrology.allfiles(rivers_path; fn_startswith="cat_pfaf", fn_endswith=".shp")
+    # The glacier-fed reaches of the reference member's glacier inventory, from `GlacierHydrology.glacier_routing`.
+    surface_mask = GlacierHydrology.reference_surface_mask()
+    glacier_rivers_path = GlacierHydrology.glacier_rivers_file(surface_mask)
 
     glacier_rivers_runoff_path = replace(glacier_rivers_path, ".arrow" => "_runoff.arrow")
     glacier_rivers_runoff_path_jld2 = replace(glacier_rivers_runoff_path, ".arrow" => "_runoff.jld2")
 
-    glacier_outlines_path = "/mnt/bylot-r3/data/GlacierOutlines/rgi60/rgi60_Global.gpkg"
-    glacier_routing_path = replace(glacier_outlines_path, ".gpkg" => "_routing.arrow")
+    glacier_routing_path = GlacierHydrology.glacier_routing_file(surface_mask)
    
     # Use uncorrected ensemble simulations only
     river_Q_path_ens = joinpath(paths[:data_dir], "rivers/Collins2024/Qout_pfaf_ii_GLDAS_ENS_M_1980-01_2009-12_utc/")
@@ -62,14 +62,14 @@ begin
     # Total runoff is the sum of subsurface runoff "Qsb_tavg" and surface runoff "Qs_tavg".
     runoff_vars = [[:Qs_acc, :Qsb_acc],  [:Qsm_acc]]
     glacier_rivers_land_flux_paths = [
-        joinpath(rivers_path, "riv_pfaf_MERIT_Hydro_v07_Basins_v01_glacier_Qs_acc_Qsb_acc.nc"), 
-        joinpath(rivers_path, "riv_pfaf_MERIT_Hydro_v07_Basins_v01_glacier_Qsm_acc.nc")]
+        replace(glacier_rivers_path, ".arrow" => "_Qs_acc_Qsb_acc.nc"),
+        replace(glacier_rivers_path, ".arrow" => "_Qsm_acc.nc")]
 end
 
 # download GLDAS LSMs
 if download_lsm_files
     # find list of urls that were downloaded from https://disc.gsfc.nasa.gov/datasets?keywords=GLDAS
-    gldas_file_urls = GGA.allfiles(gldas_folder; fn_endswith = "_.txt")
+    gldas_file_urls = GlacierHydrology.allfiles(gldas_folder; fn_endswith = "_.txt")
     downloadstreams = 6;
 
     # download the files
@@ -99,7 +99,7 @@ begin #[~2 min]
     basins.COMID = Int64.(basins.COMID) # this is needed as the COMID Type is Vector{Union{Missing, Int64}}:
 
     # load in river reaches
-    rivers = GGA.river_reaches(rivers_paths; col_names=["geometry", "COMID", "NextDownID", "maxup"])
+    rivers = GlacierHydrology.river_reaches(rivers_paths; col_names=["geometry", "COMID", "NextDownID", "maxup"])
     
     if nrow(rivers) == nrow(basins)
         basins[!,:NextDownID] = rivers[:,:NextDownID]
@@ -127,7 +127,7 @@ end
 for i in eachindex(runoff_vars)
 
     # read in fluxes from each lsm
-    files = GGA.allfiles(gldas_folder; fn_endswith=".nc4", fn_startswith = lsm_names[1])
+    files = GlacierHydrology.allfiles(gldas_folder; fn_endswith=".nc4", fn_startswith = lsm_names[1])
     Q = Dict()
 
     for runoff_var in runoff_vars[i]
@@ -135,7 +135,7 @@ for i in eachindex(runoff_vars)
         Q[runoff_var] = cat(Raster.(files; name=runoff_vars[i][1])...; dims=Ti)
     
         for lsm_name in lsm_names
-            files = GGA.allfiles(gldas_folder; fn_endswith=".nc4", fn_startswith = lsm_name)
+            files = GlacierHydrology.allfiles(gldas_folder; fn_endswith=".nc4", fn_startswith = lsm_name)
         
             if (lsm_name == lsm_names[1]) && (runoff_var == runoff_vars[i][1])
                 continue
@@ -168,11 +168,11 @@ for i in eachindex(runoff_vars)
     # apply linear reservoir model for subsruface runoff with a time delay factor of 45 days [Getirana et al. 2012]
     if haskey(Q, :Qsb_acc) # [~2 min]
         Tb = 45 # concentration time [days] - [Getirana et al. 2012]
-        impulse_resonse = GGA.linear_reservoir_impulse_response_monthly(Tb)
+        impulse_resonse = GlacierHydrology.linear_reservoir_impulse_response_monthly(Tb)
 
         #p = lines(copy(Q[:Qsb_acc][180, 80, :])) # sanity check
         #xlims!(p.axis, [DateTime(2010, 1, 1), DateTime(2015, 1, 1)])
-        GGA.apply_vector_impulse_resonse!(Q[:Qsb_acc], impulse_resonse)
+        GlacierHydrology.apply_vector_impulse_resonse!(Q[:Qsb_acc], impulse_resonse)
         #lines!(dims(Q[:Qsb_acc][180, 80, :], :Ti).val, Q[:Qsb_acc][180, 80, :].data);p  # sanity check
     end
 
@@ -198,7 +198,7 @@ for i in eachindex(runoff_vars)
     end
 
 
-    river_flux = GGA.flux_accumulate!(river_inputs, basins.COMID, basins.NextDownID, basins.HeadBasin, basins.basin02) #[2 min]
+    river_flux = GlacierHydrology.flux_accumulate!(river_inputs, basins.COMID, basins.NextDownID, basins.HeadBasin, basins.basin02) #[2 min]
 
     # subset to glacier river reaches for saving 
     glacier_rivers = GeoDataFrames.read(glacier_routing_path)

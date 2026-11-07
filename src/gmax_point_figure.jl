@@ -19,7 +19,7 @@ begin
     using NCDatasets
     using GeoDataFrames
     using DimensionalData
-    import GlobalGlacierAnalysis as GGA
+    import GlacierHydrology
     using Dates
     using Statistics
     using CairoMakie
@@ -28,14 +28,15 @@ begin
     dates4plot = (Date(2000,1,1), Date(2024,10,1))
     separate_out_snow = false;
 
-    paths = GGA.pathlocal
+    paths = GlacierHydrology.pathlocal
 
     glacier_flux_path = joinpath(paths[:project_dir], "Gardner2025_glacier_summary_riverflux.nc")
 
-    glacier_rivers_land_flux_path = joinpath(paths[:river],"riv_pfaf_MERIT_Hydro_v07_Basins_v01_glacier_Qs_acc_Qsb_acc.nc")
-    glacier_rivers_snow_flux_path = joinpath(paths[:river],"riv_pfaf_MERIT_Hydro_v07_Basins_v01_glacier_Qsm_acc.nc")
+    surface_mask = GlacierHydrology.reference_surface_mask()
+    glacier_rivers_path = GlacierHydrology.glacier_rivers_file(surface_mask)
+    glacier_rivers_land_flux_path = replace(glacier_rivers_path, ".arrow" => "_Qs_acc_Qsb_acc.nc")
+    glacier_rivers_snow_flux_path = replace(glacier_rivers_path, ".arrow" => "_Qsm_acc.nc")
     land_path = paths[:river]
-    glacier_rivers_path = joinpath(paths[:river], "riv_pfaf_MERIT_Hydro_v07_Basins_v01_glacier.arrow")
 end
 
 # Dates.unix2datetime(mtime(glacier_flux_path))
@@ -47,9 +48,9 @@ begin #[50s]
     separate_out_snow && (snow_flux = NCDataset(glacier_rivers_snow_flux_path))
 
     # convert to DimensionalData
-    glacier_flux = GGA.nc2dd(glacier_flux["runoff"]) / (1000 * u"kg/m^3")
-    land_flux = GGA.nc2dd(land_flux["flux"])
-    separate_out_snow && (snow_flux = GGA.nc2dd(snow_flux["flux"]))
+    glacier_flux = GlacierHydrology.nc2dd(glacier_flux["runoff"]) / (1000 * u"kg/m^3")
+    land_flux = GlacierHydrology.nc2dd(land_flux["flux"])
+    separate_out_snow && (snow_flux = GlacierHydrology.nc2dd(snow_flux["flux"]))
     # having issues with sortslices
     #@time glacier_flux = sortslices(glacier_flux, dims=:COMID)
     #@time land_flux = sortslices(land_flux, dims=:COMID)
@@ -114,7 +115,7 @@ for location in locations
     name = location[2]
 
     date_range = (DateTime(2000,3,1), DateTime(2024,10,1))
-    fig = GGA.plot_point_location_river_flux(land_flux, glacier_flux; date_range, COMID, name, show_title=false)
+    fig = GlacierHydrology.plot_point_location_river_flux(land_flux, glacier_flux; date_range, COMID, name, show_title=false)
     display(fig)
 
     out_name = replace(split(name, ",")[1], " " => "_")

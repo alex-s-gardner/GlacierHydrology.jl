@@ -1,4 +1,4 @@
-module GlobalGlacierAnalysis
+module GlacierHydrology
 
    module MyUnits
       using Unitful; @unit Gt "Gt" M 1u"Pg" false
@@ -6,19 +6,10 @@ module GlobalGlacierAnalysis
 
    using Unitful
    Unitful.register(MyUnits)
-   using GlobalGlacierAnalysis.MyUnits
+   using GlacierHydrology.MyUnits
    
    # import geographic packages
    using Proj
-   using GeoArrays
-   # SpaceAltimetry 0.5.1 or later: 0.5.0 names its Makie extension file wrongly and fails to load
-   # alongside CairoMakie. It exports `SpaceLiDAR` as an alias of itself, so `SpaceLiDAR.`-qualified
-   # calls resolve to it.
-   using SpaceAltimetry
-   using Geodesy
-   # `import`, not `using`: FastGeoProjections exports `transform`, which would make the
-   # DataFrames `transform` ambiguous.
-   import FastGeoProjections
    using Rasters
    using Shapefile
    using LibGEOS
@@ -26,14 +17,10 @@ module GlobalGlacierAnalysis
 
    # file IO
    using FileIO
-   using Arrow
-   using HTTP
-   using JSON
    using MAT
    using CSV
    using NCDatasets
    using JLD2
-   using Aria2_jll
    
 
    # standard packages
@@ -46,40 +33,24 @@ module GlobalGlacierAnalysis
    using CairoMakie
    
    # other packages
-   using OffsetArrays
-   using ImageFiltering
-   using Metaheuristics
    using Extents
    using Interpolations
-   using StaticArrays
-   using Logging
    using Printf
-   using NearestNeighbors
    using StatsBase
-   using Stencils  
-   using NonlinearSolve
-   using ScatteredInterpolation
+   import TOML
    using LsqFit
    using Distances
    using DataInterpolations
-   using Distributions
-   using Images
    using FlexiJoins
-   using Loess
    using LinearAlgebra
    using Rotations
    using CoordinateTransformations
-   using SparseArrays
    using SortTileRecursiveTree
    using AbstractTrees
    using ProgressMeter
    using Random
-   using LazyGrids
    using GeometryBasics
 
-   # custom packages create as part of this project
-   using RangeExtractor
-   using GeoTiles
    using BinStatistics
 
    # import packages
@@ -90,7 +61,7 @@ module GlobalGlacierAnalysis
    import GeometryOpsCore as GOC
    import SortTileRecursiveTree
 
-   # Glacier volume change comes from GlacierVolumeChange.jl: GGA reads each ensemble member's volume
+   # Glacier volume change comes from GlacierVolumeChange.jl: this package reads each ensemble member's volume
    # product (`GVC.read_volume`) and uses its geotile, time and fitting helpers listed here.
    import GlacierVolumeChange as GVC
    using GlacierVolumeChange:
@@ -109,6 +80,8 @@ module GlobalGlacierAnalysis
    include("utilities_project.jl")
    include("utilities_gemb.jl")
    include("utilities_gemb_tiles.jl")
+   include("utilities_wgms.jl")
+   include("utilities_gemb_physics.jl")
    include("utilities_routing.jl")
    include("utilities_synthesis.jl")
    include("utilities_postprocessing.jl")

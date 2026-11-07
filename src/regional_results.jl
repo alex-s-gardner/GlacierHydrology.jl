@@ -33,7 +33,6 @@
 # - Analysis of endorheic vs. ocean-draining glacier contributions
 
 # NOTE: errors are at the 95% confidence interval from the reference run for this study and 95% confidence interval from GRACE
-#function regional_results(path2runs_synthesized, ensemble_reference_file; error_quantile=0.95, error_scaling=1.5)
 begin
     error_quantile=0.95
     error_scaling=1.5
@@ -46,19 +45,22 @@ begin
     using CairoMakie
     using DataInterpolations
     using Unitful
-    import GlobalGlacierAnalysis as GGA
+    import GlacierHydrology
     import GlacierVolumeChange as GVC
 
-    Unitful.register(GGA.MyUnits)
-    using GlobalGlacierAnalysis.MyUnits
+    Unitful.register(GlacierHydrology.MyUnits)
+    using GlacierHydrology.MyUnits
 
-    reference_ensemble_file = GVC.reference_ensemble_file;
-    ensemble_reference_file = replace(reference_ensemble_file, "_aligned.jld2" => "_synthesized.jld2")
+    ens = GlacierHydrology.ensemble_paths()
+    reference_ensemble_file = ens.filled_ref
+    ensemble_reference_file = ens.synthesized_ref
+    path2runs_filled = ens.filled
+    path2runs_synthesized = ens.synthesized
     
     # to include in uncertainty
-    paths = GGA.pathlocal
+    paths = GlacierHydrology.pathlocal
     
-    glacier_flux_path = GGA.pathlocal[:glacier_summary]
+    glacier_flux_path = GlacierHydrology.pathlocal[:glacier_summary]
 
     discharge_fractional_error = 0.15
     trend_fractional_error_min = 0.2;
@@ -73,118 +75,110 @@ begin
     dates_glambie_overlap = [DateTime(2000, 6, 1), DateTime(2023, 1, 1)] # use these date for comparing individual model runs to GRACE (only need for rmse anlysis)
     center_on_dates = DateTime(2002, 5, 1):Month(1):DateTime(2005, 12, 15)
 
-    glacier_summary_file = GGA.pathlocal[:glacier_summary]
+    glacier_summary_file = GlacierHydrology.pathlocal[:glacier_summary]
 
     # path2perglacier = replace(ensemble_reference_file, ".jld2" => "_perglacier.jld2")
-    path2discharge =  paths[:discharge_global]
+    path2discharge = GlacierHydrology.discharge_global_file(ens.surface_mask_ref)
     path2rgi_regions = paths[:rgi6_regions_shp]
 
-    path2river_flux = joinpath(paths[:river], "riv_pfaf_MERIT_Hydro_v07_Basins_v01_glacier.arrow")
+    # glacier inventory of the reference member: the glacier summary and the river routing follow it
+    surface_mask_ref = ens.surface_mask_ref
+    path2river_flux = GlacierHydrology.glacier_rivers_file(surface_mask_ref)
 
-    path2runs_filled, params = GVC.binned_filled_filepaths(;
-        project_id=:v01,
-        surface_masks=["glacier", "glacier_rgi7"],
-        dem_ids=["best", "cop30_v2"],
-        curvature_corrects=[false, true],
-        amplitude_corrects=[true],
-        binning_methods=["median", "nmad3", "nmad5"],
-        fill_params=[1, 2, 3, 4],
-        binned_folders=[GVC.analysis_paths(; geotile_width=2).binned, replace(GVC.analysis_paths(; geotile_width=2).binned, "binned" => "binned_unfiltered")],
-        include_existing_files_only=true
-    )
-    path2runs_synthesized = replace.(path2runs_filled, "aligned.jld2" => "synthesized.jld2")
 end
 
 begin
     # pre-process data
     #begin #[10 min]
     # load discharge for each RGI [<1s]
-    discharge_rgi = GGA.discharge_rgi(path2discharge, path2rgi_regions; fractional_error = discharge_fractional_error);
+    discharge_rgi = GlacierHydrology.discharge_rgi(path2discharge, path2rgi_regions; fractional_error = discharge_fractional_error);
 
     # load results for all runs for each RGI [18s]
-    runs_rgi = GGA.runs2rgi(path2runs_synthesized);
+    runs_rgi = GlacierHydrology.runs2rgi(path2runs_synthesized);
 
     # fit trends and acceleration for each model and RGI [33s]
-    runs_rgi_fits = GGA.rgi_trends(runs_rgi, discharge_rgi, dates4trend);
+    runs_rgi_fits = GlacierHydrology.rgi_trends(runs_rgi, discharge_rgi, dates4trend);
 
     # center data
-    runs_rgi = GGA.runs_center!(runs_rgi, center_on_dates);
-    GGA.check_for_all_nans(runs_rgi)
+    runs_rgi = GlacierHydrology.runs_center!(runs_rgi, center_on_dates);
+    GlacierHydrology.check_for_all_nans(runs_rgi)
 
     # extract reference run and calculate 95% confidence interval
-    regions = GGA.runs_ref_and_err(runs_rgi, ensemble_reference_file; error_quantile, error_scaling);
-    GGA.check_for_all_nans(regions)
+    regions = GlacierHydrology.runs_ref_and_err(runs_rgi, ensemble_reference_file; error_quantile, error_scaling);
+    GlacierHydrology.check_for_all_nans(regions)
 
-    region_fits = GGA.region_fit_ref_and_err(runs_rgi_fits, ensemble_reference_file; error_quantile, error_scaling, discharge = discharge_rgi)
-    GGA.check_for_all_nans(region_fits)
+    region_fits = GlacierHydrology.region_fit_ref_and_err(runs_rgi_fits, ensemble_reference_file; error_quantile, error_scaling, discharge = discharge_rgi)
+    GlacierHydrology.check_for_all_nans(region_fits)
 
-    region_fits = GGA.region_min_frac_error!(region_fits; fractional_error_min = trend_fractional_error_min, varnames=trend_fractional_error_varnames, parameters=trend_fractional_error_parameters);
+    region_fits = GlacierHydrology.region_min_frac_error!(region_fits; fractional_error_min = trend_fractional_error_min, varnames=trend_fractional_error_varnames, parameters=trend_fractional_error_parameters);
 
 
     # load GRACE data [95% confidence interval]
-    grace = GGA.grace_masschange();
-    grace[:,:,At(false)] = GGA.regions_center!(grace[:,:,At(false)], center_on_dates)
+    grace = GlacierHydrology.grace_masschange();
+    grace[:,:,At(false)] = GlacierHydrology.regions_center!(grace[:,:,At(false)], center_on_dates)
     regions["dm_grace"] = grace
-    GGA.check_for_all_nans(regions)
+    GlacierHydrology.check_for_all_nans(regions)
 
     # add GlaMBIE results
-    regions["dm_glambie"] = GGA.glambie2024()
-    regions["dm_glambie"][:,:,At(false)] = GGA.regions_center!(regions["dm_glambie"][:,:,At(false)], center_on_dates)
-    GGA.check_for_all_nans(regions)
+    regions["dm_glambie"] = GlacierHydrology.glambie2024()
+    regions["dm_glambie"][:,:,At(false)] = GlacierHydrology.regions_center!(regions["dm_glambie"][:,:,At(false)], center_on_dates)
+    GlacierHydrology.check_for_all_nans(regions)
 
     # add discarge to region_fits
     using DimensionalData
+    # `runs2rgi` sums each geotile's `discharge` column: the discharge `dm` subtracts. It stays in
+    # region_fits as `discharge_geotile`, for the mass-closure check. The reported `discharge` is the
+    # per-glacier regional sum from `discharge_rgi`. Both are Gt yr⁻¹.
     (dvarname, drgi, dparameters, derr) = dims(region_fits)
-    dvarname_new = Dim{:varname}([collect(dvarname)..., "discharge"])
+    "discharge" in dvarname || error("region_fits has no geotile discharge; runs2rgi must sum \"discharge\"")
+    dvarname_geotile = Dim{:varname}(replace(collect(dvarname), "discharge" => "discharge_geotile"))
+    region_fits = DimensionalData.rebuild(region_fits; dims=(dvarname_geotile, drgi, dparameters, derr))
+    dvarname_new = Dim{:varname}([collect(dvarname_geotile)..., "discharge"])
     region_fits = cat(region_fits, zeros(Dim{:varname}(["discharge"]), drgi, dparameters, derr), dims=dvarname_new)
     region_fits[At("discharge"), :, At("trend"), At(false)] = discharge_rgi[:, At(false)]
     region_fits[At("discharge"), :, At("trend"), At(true)] = discharge_rgi[:, At(true)]
    
     # deteremine endorheic and non-endorheic glacier runoff [3 min]
-    # rivers have only been calculated for rgi6 so this will throw an error if using glacier_rgi7
-    if !occursin("glacier_rgi7", ensemble_reference_file)
-        error("rivers have only been calculated for rgi7 so this will throw an error if using rgi6")
-    else
-        dm_gt_sinktype = GGA.rgi_endorheic(path2river_flux, glacier_summary_file; dates4trend)
-        endorheic_scale_correction = 1 .- dm_gt_sinktype[:,:, At(true)] ./ dm_gt_sinktype[:,:, At(false)]
-    end
+    isfile(path2river_flux) || error("no glacier river routing for surface mask $(surface_mask_ref) at $(path2river_flux): run GlacierHydrology.glacier_routing(; surface_mask=$(repr(surface_mask_ref))) first")
+    dm_gt_sinktype = GlacierHydrology.rgi_endorheic(path2river_flux, glacier_summary_file; dates4trend)
+    endorheic_scale_correction = 1 .- dm_gt_sinktype[:,:, At(true)] ./ dm_gt_sinktype[:,:, At(false)]
 
     # compute trends over grace-altim overlap period
-    runs_rgi_fits_grace = GGA.rgi_trends(runs_rgi, discharge_rgi, dates_altim_grace_overlap);
+    runs_rgi_fits_grace = GlacierHydrology.rgi_trends(runs_rgi, discharge_rgi, dates_altim_grace_overlap);
     dvarname2 = Dim{:varname}([collect(dvarname)..., "dm_grace"])
     region_fits_grace = zeros(dvarname2, drgi, dparameters, derr)
-    region_fits_grace[At(collect(dvarname)), :, : ,:] = GGA.region_fit_ref_and_err(runs_rgi_fits_grace, ensemble_reference_file; error_quantile, error_scaling, discharge = discharge_rgi)
+    region_fits_grace[At(collect(dvarname)), :, : ,:] = GlacierHydrology.region_fit_ref_and_err(runs_rgi_fits_grace, ensemble_reference_file; error_quantile, error_scaling, discharge = discharge_rgi)
 
-    region_fits_grace = GGA.region_min_frac_error!(region_fits_grace; fractional_error_min = trend_fractional_error_min, varnames=trend_fractional_error_varnames, parameters=trend_fractional_error_parameters);
+    region_fits_grace = GlacierHydrology.region_min_frac_error!(region_fits_grace; fractional_error_min = trend_fractional_error_min, varnames=trend_fractional_error_varnames, parameters=trend_fractional_error_parameters);
 
     # regions 12 and 99 contain NaN so exclude them in trend calculation
-    region_fits_grace[At("dm_grace"), At(setdiff(drgi, [12, 99])), : , At(false)] = GGA.rgi_trends(regions["dm_grace"][At(setdiff(drgi, [12, 99])),:, At(false)], dates_altim_grace_overlap);
+    region_fits_grace[At("dm_grace"), At(setdiff(drgi, [12, 99])), : , At(false)] = GlacierHydrology.rgi_trends(regions["dm_grace"][At(setdiff(drgi, [12, 99])),:, At(false)], dates_altim_grace_overlap);
 
     # compute trends over the GlaMBIE period
     dvarname2 = Dim{:varname}([collect(dvarname)..., "dm_glambie"])
     region_fits_glambie = zeros(dvarname2, drgi, dparameters, derr)
-    runs_rgi_fits_glambie = GGA.rgi_trends(runs_rgi, discharge_rgi, dates_glambie_overlap);
-    region_fits_glambie[At(collect(dvarname)), :, :, :] = GGA.region_fit_ref_and_err(runs_rgi_fits_glambie, ensemble_reference_file; error_quantile, error_scaling, discharge = discharge_rgi)
+    runs_rgi_fits_glambie = GlacierHydrology.rgi_trends(runs_rgi, discharge_rgi, dates_glambie_overlap);
+    region_fits_glambie[At(collect(dvarname)), :, :, :] = GlacierHydrology.region_fit_ref_and_err(runs_rgi_fits_glambie, ensemble_reference_file; error_quantile, error_scaling, discharge = discharge_rgi)
 
-    region_fits_glambie = GGA.region_min_frac_error!(region_fits_glambie; fractional_error_min = trend_fractional_error_min, varnames=trend_fractional_error_varnames, parameters=trend_fractional_error_parameters);
+    region_fits_glambie = GlacierHydrology.region_min_frac_error!(region_fits_glambie; fractional_error_min = trend_fractional_error_min, varnames=trend_fractional_error_varnames, parameters=trend_fractional_error_parameters);
 
-    region_fits_glambie[At("dm_glambie"), :, : , At(false)] = GGA.rgi_trends(regions["dm_glambie"][:,:, At(false)], dates_glambie_overlap);
+    region_fits_glambie[At("dm_glambie"), :, : , At(false)] = GlacierHydrology.rgi_trends(regions["dm_glambie"][:,:, At(false)], dates_glambie_overlap);
 
     runs_rgi_noaltim = filter(p -> p[1] in setdiff(keys(runs_rgi), ["dm_altim", "dv_altim"]), runs_rgi)
-    runs_rgi_fits_firstdecade = GGA.rgi_trends(runs_rgi_noaltim, discharge_rgi, dates_firstdecade);
-    region_fits_firstdecade = GGA.region_fit_ref_and_err(runs_rgi_fits_firstdecade, ensemble_reference_file; error_quantile, error_scaling, discharge = discharge_rgi);
+    runs_rgi_fits_firstdecade = GlacierHydrology.rgi_trends(runs_rgi_noaltim, discharge_rgi, dates_firstdecade);
+    region_fits_firstdecade = GlacierHydrology.region_fit_ref_and_err(runs_rgi_fits_firstdecade, ensemble_reference_file; error_quantile, error_scaling, discharge = discharge_rgi);
 
-    region_fits_firstdecade = GGA.region_min_frac_error!(region_fits_firstdecade; fractional_error_min = trend_fractional_error_min, varnames=trend_fractional_error_varnames, parameters=trend_fractional_error_parameters);
+    region_fits_firstdecade = GlacierHydrology.region_min_frac_error!(region_fits_firstdecade; fractional_error_min = trend_fractional_error_min, varnames=trend_fractional_error_varnames, parameters=trend_fractional_error_parameters);
 
-    runs_rgi_fits_lastdecade = GGA.rgi_trends(runs_rgi_noaltim, discharge_rgi, dates_lastdecade);
-    region_fits_lastdecade = GGA.region_fit_ref_and_err(runs_rgi_fits_lastdecade, ensemble_reference_file; error_quantile, error_scaling, discharge = discharge_rgi);
+    runs_rgi_fits_lastdecade = GlacierHydrology.rgi_trends(runs_rgi_noaltim, discharge_rgi, dates_lastdecade);
+    region_fits_lastdecade = GlacierHydrology.region_fit_ref_and_err(runs_rgi_fits_lastdecade, ensemble_reference_file; error_quantile, error_scaling, discharge = discharge_rgi);
 
-    runs_rgi_fits_lastdecade = GGA.region_min_frac_error!(runs_rgi_fits_lastdecade; fractional_error_min = trend_fractional_error_min, varnames=trend_fractional_error_varnames, parameters=trend_fractional_error_parameters);
+    runs_rgi_fits_lastdecade = GlacierHydrology.region_min_frac_error!(runs_rgi_fits_lastdecade; fractional_error_min = trend_fractional_error_min, varnames=trend_fractional_error_varnames, parameters=trend_fractional_error_parameters);
 end;
 
 # CREATE OUTPUTS FOR PAPER
 begin
-    geotiles = GGA._geotile_load_align(; surface_mask="glacier_rgi7")
+    geotiles = GlacierHydrology._geotile_load_align(; surface_mask=surface_mask_ref)
 
     for apply_exclude_regions = [false, true];
 
@@ -197,7 +191,7 @@ begin
         params = ["trend", "acceleration", "amplitude", "phase"]
 
         # create a Table 1 of rates and accelerations
-        regional_results = GGA.region_fits_table(region_fits, varnames=["dv_altim", "dv", "dm", "acc", "runoff", "melt", "refreeze", "ec", "rain", "discharge", "smb", "fac", "gsi"], rgi_regions=setdiff(vcat(1:15, 98, 16:19, 99), exclude_regions), no_err=["gsi"], no_acceleration=["gsi","discharge"], amplitude = ["dv_altim", "dv"], digits=1)
+        regional_results = GlacierHydrology.region_fits_table(region_fits, varnames=["dv_altim", "dv", "dm", "acc", "runoff", "melt", "refreeze", "ec", "rain", "discharge", "smb", "fac", "gsi"], rgi_regions=setdiff(vcat(1:15, 98, 16:19, 99), exclude_regions), no_err=["gsi"], no_acceleration=["gsi","discharge"], amplitude = ["dv_altim", "dv"], digits=1)
 
         altim_cols = names(regional_results)[occursin.("_altim", names(regional_results))]
         rename!(regional_results, altim_cols .=> replace.(altim_cols, "_altim" => "_synthesis"))
@@ -240,8 +234,8 @@ begin
 
         endorheic_fraction = DataFrame() 
         endorheic_fraction[!, :rgi] = val(dims(endorheic_scale_correction, :rgi))
-        endorheic_fraction[!, :region_name] = GGA.rginum2label.(endorheic_fraction[!, :rgi])
-        endorheic_fraction[!, :dm_endorheic_fraction] = GGA.rginum2label.(endorheic_fraction[!, :rgi])
+        endorheic_fraction[!, :region_name] = GlacierHydrology.rginum2label.(endorheic_fraction[!, :rgi])
+        endorheic_fraction[!, :dm_endorheic_fraction] = GlacierHydrology.rginum2label.(endorheic_fraction[!, :rgi])
         for varname in dims(endorheic_scale_correction, :varname)
             col_name = "$(varname)_endorheic_fraction"
             endorheic_fraction[!, col_name] = 1 .- endorheic_scale_correction[varname = At(varname)]
@@ -266,7 +260,7 @@ begin
         var0 = "dm"
         drgi = dims(regions_out[var0], :rgi)
         ddate = dims(regions_out[var0][date=date_range], :date)
-        decyear = GGA.decimalyear.(val(ddate))
+        decyear = GlacierHydrology.decimalyear.(val(ddate))
         derror = dims(regions_out[var0], :error)
 
         for k in keys(regions_out)
@@ -277,7 +271,7 @@ begin
 
             if ddate != ddate1
                 var2 = fill(NaN, drgi, ddate, derror)
-                decyear2 = GGA.decimalyear.(val(dims(var1, :date)))
+                decyear2 = GlacierHydrology.decimalyear.(val(dims(var1, :date)))
 
                 for rgi in drgi
 
@@ -293,12 +287,8 @@ begin
                 end
             end
 
-            # add units
-            if k == "fac" || occursin("dv", k)
-                unit = 1u"km^3"
-            else
-                unit = 1u"Gt"
-            end
+            # add units: runs2rgi sums volumes in km³ and masses in Gt; GRACE and GlaMBIE are Gt
+            unit = GlacierHydrology.is_volume_varname(k) ? 1u"km^3" : 1u"Gt"
 
             var1 *= unit
             regions_out[k] = var1[rgi = At(setdiff(drgi, exclude_regions))]
@@ -320,9 +310,9 @@ begin
                     for error0 in dims(regions_out[k],:error)
 
                         # interpolate anomalies using weighted distance (Shepard(2))
-                        ts_interp = DataInterpolations.LinearInterpolation(regions_out[k][rgi = At(rgi), error = At(error0)], GGA.decimalyear.(val(dims(regions_out[k],:date))); extrapolation = ExtrapolationType.Linear)
+                        ts_interp = DataInterpolations.LinearInterpolation(regions_out[k][rgi = At(rgi), error = At(error0)], GlacierHydrology.decimalyear.(val(dims(regions_out[k],:date))); extrapolation = ExtrapolationType.Linear)
 
-                        foo[rgi = At(rgi), error = At(error0)] = ts_interp(GGA.decimalyear.(val(ddate)))
+                        foo[rgi = At(rgi), error = At(error0)] = ts_interp(GlacierHydrology.decimalyear.(val(ddate)))
                     end
                 end
             end
@@ -360,10 +350,10 @@ begin
         end
     
 
-        GGA.dimstack2netcdf(regions_out_stack, filename0)
+        GlacierHydrology.dimstack2netcdf(regions_out_stack, filename0)
 
         # copy data readme file to project directory
-        cp("/home/gardnera/Documents/GitHub/GlobalGlacierAnalysis.jl/src/Gardner2025_DataReadMe.txt", joinpath(paths[:project_dir], "Gardner2025_DataReadMe.txt"); force=true)
+        cp(joinpath(pkgdir(GlacierHydrology), "docs", "data_archive", "Gardner2025_DataReadMe.txt"), joinpath(paths[:project_dir], "Gardner2025_DataReadMe.txt"); force=true)
     end
 end
 
@@ -374,9 +364,9 @@ begin
     params = ["trend"]
 
     println("----------- from $(dates4trend[1]) to $(dates4trend[2]) -----------")
-    regional_results = GGA.error_bar_table(region_fits; varnames, params, rgi_regions=setdiff(drgi, exclude_regions), digits=2)
+    regional_results = GlacierHydrology.error_bar_table(region_fits; varnames, params, rgi_regions=setdiff(drgi, exclude_regions), digits=2)
 
-    GGA.show_error_bar_table(regional_results; cols2display = 1)
+    GlacierHydrology.show_error_bar_table(regional_results; cols2display = 1)
 end
 
 # dump summary conclusions to console
@@ -409,7 +399,7 @@ begin
     v = "dm"
     rgi = 99;
     val0 = region_fits[varname = At(v), rgi = At(rgi), parameter = At("trend"), error = At(false)]*endorheic_scale_correction[At(v), At(rgi)];
-    println("we determine that $(round(Int, val0)) Gt/yr of glacier loss contributed $(round((val0 / GGA.ocean_area_km2* 1E6), digits=2)) mm/yr SLR)")
+    println("we determine that $(round(Int, val0)) Gt/yr of glacier loss contributed $(round((val0 / GlacierHydrology.ocean_area_km2* 1E6), digits=2)) mm/yr SLR)")
 
     val0 = region_fits[varname = At(v), rgi = At(rgi), parameter = At("trend"), error = At(false)]*(1. - endorheic_scale_correction[At(v), At(rgi)]);
     println("with $(round(Int, val0)) Gt yr-1 remaining within landlocked endorheic basins")
@@ -591,9 +581,9 @@ begin
     rgis = setdiff(drgi, [99, 13, 14, 15])
     drgis = dims(volume_to_mass_conversion_factor[At(rgis)], :rgi)
     index_min =argmin(volume_to_mass_conversion_factor[At(rgis)])
-    GGA.rginum2label(drgis[index_min])
+    GlacierHydrology.rginum2label(drgis[index_min])
     index_max =argmax(volume_to_mass_conversion_factor[At(rgis)])
-    println("and varies regionally from $(volume_to_mass_conversion_factor[At(rgis)][index_min]) kg m⁻³ in $(GGA.rginum2label(drgis[index_min])) to $(volume_to_mass_conversion_factor[At(rgis)][index_max]) kg m⁻³ in $(GGA.rginum2label(drgis[index_max]))")
+    println("and varies regionally from $(volume_to_mass_conversion_factor[At(rgis)][index_min]) kg m⁻³ in $(GlacierHydrology.rginum2label(drgis[index_min])) to $(volume_to_mass_conversion_factor[At(rgis)][index_max]) kg m⁻³ in $(GlacierHydrology.rginum2label(drgis[index_max]))")
 
     volume_to_mass_conversion_amplitude = round.(Int,region_fits[varname = At("fac"), parameter= At("amplitude"), error = At(false)] ./ region_fits[varname = At("dv"), parameter= At("amplitude"), error = At(false)] .* 100)
     println("Globally, firn air content evolution accounts for $(volume_to_mass_conversion_amplitude[rgi = At(99)])%")
@@ -601,18 +591,18 @@ begin
     rgis = setdiff(drgi, [99, 13, 14, 15])
     drgis = dims(volume_to_mass_conversion_amplitude[At(rgis)], :rgi)
     index_min =argmin(volume_to_mass_conversion_amplitude[At(rgis)])
-    GGA.rginum2label(drgis[index_min])
+    GlacierHydrology.rginum2label(drgis[index_min])
     index_max =argmax(volume_to_mass_conversion_amplitude[At(rgis)])
-    println("ranges regionally from $(volume_to_mass_conversion_amplitude[At(rgis)][index_min])% in $(GGA.rginum2label(drgis[index_min])) to $(volume_to_mass_conversion_amplitude[At(rgis)][index_max])% in $(GGA.rginum2label(drgis[index_max]))")
+    println("ranges regionally from $(volume_to_mass_conversion_amplitude[At(rgis)][index_min])% in $(GlacierHydrology.rginum2label(drgis[index_min])) to $(volume_to_mass_conversion_amplitude[At(rgis)][index_max])% in $(GlacierHydrology.rginum2label(drgis[index_max]))")
 
     error_in_amp = round.(Int, ((region_fits[varname=At("dv"), parameter=At("amplitude"), error=At(false)] .* 0.85) .- region_fits[varname=At("dm"), parameter=At("amplitude"), error=At(false)])./ region_fits[varname=At("dm"), parameter=At("amplitude"), error=At(false)] * 100)
     rgi = 98
     println("error in amplitude: $(error_in_amp[rgi = At(rgi)])%")
 
     index_min =argmin(error_in_amp[At(rgis)])
-    GGA.rginum2label(drgis[index_min])
+    GlacierHydrology.rginum2label(drgis[index_min])
     index_max =argmax(error_in_amp[At(rgis)])
-    println("ranges regionally from $(error_in_amp[At(rgis)][index_min])% in $(GGA.rginum2label(drgis[index_min])) to $(error_in_amp[At(rgis)][index_max])% in $(GGA.rginum2label(drgis[index_max]))")
+    println("ranges regionally from $(error_in_amp[At(rgis)][index_min])% in $(GlacierHydrology.rginum2label(drgis[index_min])) to $(error_in_amp[At(rgis)][index_max])% in $(GlacierHydrology.rginum2label(drgis[index_max]))")
 
 
 
@@ -620,16 +610,20 @@ begin
     println("\n--------------------- FIGURE 2 numbers ---------------------")
     rgi = 99;
     for v = ["acc", "fac", "dm", "discharge", "runoff", "ec", "rain", "refreeze"]
-        println("$(v):\n    trend: $(round(Int,region_fits[varname = At(v), rgi=At(rgi), parameter= At("trend"), error = At(false)])) ± $(round(Int,region_fits[varname = At(v), rgi=At(rgi), parameter= At("trend"), error = At(true)])) Gt yr-1\n    acceleration:$(round(region_fits[varname = At(v), rgi=At(rgi), parameter= At("acceleration"), error = At(false)], digits=1)) ± $(round(region_fits[varname = At(v), rgi=At(rgi), parameter= At("acceleration"), error = At(true)], digits=1)) Gt yr-2 ")
+        u = GlacierHydrology.is_volume_varname(v) ? "km3" : "Gt"
+        println("$(v):\n    trend: $(round(Int,region_fits[varname = At(v), rgi=At(rgi), parameter= At("trend"), error = At(false)])) ± $(round(Int,region_fits[varname = At(v), rgi=At(rgi), parameter= At("trend"), error = At(true)])) $(u) yr-1\n    acceleration:$(round(region_fits[varname = At(v), rgi=At(rgi), parameter= At("acceleration"), error = At(false)], digits=1)) ± $(round(region_fits[varname = At(v), rgi=At(rgi), parameter= At("acceleration"), error = At(true)], digits=1)) $(u) yr-2 ")
 
         if v == "dm" || v == "runoff"
             println("    endorheic fraction: [$(round((1-endorheic_scale_correction[At(v), At(rgi)])*100, digits=1))%]")
         end
     end
 
-    # check for mass closure
-    dm0 = region_fits[varname = At("acc"), rgi=At(rgi), parameter= At("trend"), error = At(false)] - region_fits[varname = At("runoff"), rgi=At(rgi), parameter= At("trend"), error = At(false)] - region_fits[varname = At("discharge"), rgi=At(rgi), parameter= At("trend"), error = At(false)] - region_fits[varname = At("ec"), rgi=At(rgi), parameter= At("trend"), error = At(false)] 
-    println("\nThere is a $(round(Int, (dm0 - region_fits[varname = At("dm"), rgi=At(rgi), parameter= At("trend"), error = At(false)]))) Gt yr-1 mass closure error [I ASSUME THAT THIS COMES FROM LINEAR FITTING TO EACH VARIABLE INDIVIDUALLY]")
+    # check for mass closure: acc - runoff - ec is smb, and dm = smb - the geotile discharge, all in Gt
+    closure_gtyr = GlacierHydrology.mass_closure_residual(region_fits; rgi, discharge="discharge_geotile")
+    println("\nmass closure residual (acc - runoff - ec - discharge - dm): $(round(closure_gtyr; digits=3)) Gt yr-1")
+    abs(closure_gtyr) < 1 || error("mass budget does not close: acc - runoff - ec - discharge - dm = $(closure_gtyr) Gt yr-1")
+    discharge_difference = region_fits[varname = At("discharge"), rgi=At(rgi), parameter= At("trend"), error = At(false)] - region_fits[varname = At("discharge_geotile"), rgi=At(rgi), parameter= At("trend"), error = At(false)]
+    println("per-glacier regional discharge minus summed geotile discharge: $(round(discharge_difference; digits=1)) Gt yr-1")
 
     v = "net_acc";
     p = "trend";
@@ -648,7 +642,7 @@ begin
     val8 = region_fits[varname = At(v), rgi=At(rgi), parameter= At(p), error = At(false)];
         println("Globally, glaciers have a GSI of $(round(val8, digits=2)), indicating that the sustainable freshwater flux is augmented by an additional $(round(Int,(1-val8)*100))% from net glacier mass loss ")
 
-    println("$(GGA.rginum2label.(rgis)) —are in the poorest health, with GSIs between $(round.(extrema(region_fits[varname = At(v), rgi = At(rgis), parameter= At(p), error = At(false)]), digits=2))")
+    println("$(GlacierHydrology.rginum2label.(rgis)) —are in the poorest health, with GSIs between $(round.(extrema(region_fits[varname = At(v), rgi = At(rgis), parameter= At(p), error = At(false)]), digits=2))")
 
     rgi = 4;
     val9 = region_fits[varname = At(v), rgi=At(rgi), parameter= At(p), error = At(false)];
@@ -671,7 +665,7 @@ begin
 
     rgis = [8, 10, 11, 12, 98, 16, 17, 18]
     val13 = region_fits[varname = At(v), rgi=At(rgis), parameter= At(p), error = At(false)];
-    println("$(GGA.rginum2label.(rgis)) have GSIs in a narrow range from $(round.(extrema(val13), digits=2))")
+    println("$(GlacierHydrology.rginum2label.(rgis)) have GSIs in a narrow range from $(round.(extrema(val13), digits=2))")
 
 
     xvar = "dm_grace"
@@ -709,7 +703,7 @@ begin
 
     variables = ["dm_altim"];
     outfile = joinpath(paths[:figures], "regional_$(join(variables,"_")).png");
-    f, region_order, ylims = GGA.plot_multiregion_dvdm(
+    f, region_order, ylims = GlacierHydrology.plot_multiregion_dvdm(
         regions;
         variables = ["dm_altim"], # last variable is plotted last
         units = "Gt yr⁻¹",
@@ -728,7 +722,7 @@ begin
     exclude_regions = [5, 19, 13, 14, 15, 99] 
 
     outfile = joinpath(paths[:figures], "regional_$(join(variables,"_")).png");
-    f, _, ylims = GGA.plot_multiregion_dvdm(
+    f, _, ylims = GlacierHydrology.plot_multiregion_dvdm(
         regions;
         variables, # last variable is plotted last
         units = "Gt yr⁻¹",
@@ -744,7 +738,7 @@ begin
     # plot altimetry results with gemb data for RGI regions
     variables = ["dm_altim", "dm"]
     outfile = joinpath(paths[:figures], "regional_$(join(variables,"_")).png");
-    f, _, ylims = GGA.plot_multiregion_dvdm(
+    f, _, ylims = GlacierHydrology.plot_multiregion_dvdm(
         regions;
         variables, # last variable is plotted last
         units = "Gt yr⁻¹",
@@ -762,7 +756,7 @@ begin
     # plot altimetry results with gemb data for RGI regions
     variables = ["dm_glambie", "dm"]
     outfile = joinpath(paths[:figures], "regional_$(join(variables,"_")).png");
-    f, _, ylims = GGA.plot_multiregion_dvdm(
+    f, _, ylims = GlacierHydrology.plot_multiregion_dvdm(
         regions;
         variables, # last variable is plotted last
         units = "Gt yr⁻¹",
@@ -780,7 +774,7 @@ begin
     # plot altimetry results with gemb data for RGI regions
     variables = ["dm"];
     outfile = joinpath(paths[:figures], "regional_$(join(variables,"_")).png");
-    f, _, ylims = GGA.plot_multiregion_dvdm(
+    f, _, ylims = GlacierHydrology.plot_multiregion_dvdm(
         regions;
         variables, # last variable is plotted last
         units = "Gt yr⁻¹",
@@ -794,7 +788,7 @@ begin
     CairoMakie.save(outfile, f);
 
     # GRACE rgi regions    
-    colormap = GGA.resample(:Dark2_4, length(region_order))
+    colormap = GlacierHydrology.resample(:Dark2_4, length(region_order))
     colormap = DimArray(colormap.colors, (region_order,))
     
     title = "glacier mass change [Gt/yr]"
@@ -817,7 +811,7 @@ begin
             x = region_fits_grace[At(xvar), At(rgi), At("trend"), At(false)]
             y = region_fits_grace[At(yvar), At(rgi), At("trend"), At(false)] 
             yscale = endorheic_scale_correction[At("dm"), At(rgi)]
-            scatter!(x, y .* yscale; label=GGA.rginum2label(rgi), markersize=15, color=colormap[At(rgi)])
+            scatter!(x, y .* yscale; label=GlacierHydrology.rginum2label(rgi), markersize=15, color=colormap[At(rgi)])
         end
 
         for rgi = 98
@@ -866,7 +860,7 @@ begin
             x = region_fits_grace[At(xvar), At(rgi), At("trend"), At(false)]
             y = region_fits_grace[At(yvar), At(rgi), At("trend"), At(false)]
             yscale = 1
-            scatter!(x, y .* yscale; label=GGA.rginum2label(rgi), markersize=15, color=colormap[At(rgi)])
+            scatter!(x, y .* yscale; label=GlacierHydrology.rginum2label(rgi), markersize=15, color=colormap[At(rgi)])
         end
 
 
@@ -910,7 +904,7 @@ begin
             x = collect(region_fits_grace[At(xvar), At(rgi), At("trend"), At(false)])
             y = collect(runs_rgi_fits_grace[At(yvar), :, At(rgi), At("trend"), At(false)])
             yscale = endorheic_scale_correction[At("dm"), At(rgi)]
-            scatter!(x .* ones(length(y)), y .* yscale; label=GGA.rginum2label(rgi), markersize=15, color=colormap[At(rgi)])
+            scatter!(x .* ones(length(y)), y .* yscale; label=GlacierHydrology.rginum2label(rgi), markersize=15, color=colormap[At(rgi)])
         end
 
 
@@ -954,11 +948,11 @@ end
 begin
 
     center_on_dates = DateTime(2000, 2, 1):Month(1):DateTime(2001, 2, 1)
-    runs_rgi = GGA.runs2rgi(path2runs_synthesized);
-    runs_rgi = GGA.runs_center!(runs_rgi, center_on_dates);
+    runs_rgi = GlacierHydrology.runs2rgi(path2runs_synthesized);
+    runs_rgi = GlacierHydrology.runs_center!(runs_rgi, center_on_dates);
 
     # extract reference run and calculate 95% confidence interval
-    regions = GGA.runs_ref_and_err(runs_rgi, ensemble_reference_file; error_quantile, error_scaling);
+    regions = GlacierHydrology.runs_ref_and_err(runs_rgi, ensemble_reference_file; error_quantile, error_scaling);
 
     rgi = 99
     var = "fac"
@@ -966,10 +960,10 @@ begin
     
     ts = regions[var][date = date_range, rgi = At(rgi), error = At(false)]
     ts_error = regions[var][date = date_range, rgi = At(rgi), error = At(true)]
-    x = GGA.decimalyear.(collect(val(dims(ts, :date))))
+    x = GlacierHydrology.decimalyear.(collect(val(dims(ts, :date))))
 
 
-    f = GGA._publication_figure(columns=1, rows=1);
+    f = GlacierHydrology._publication_figure(columns=1, rows=1);
     ax = Axis(f[1, 1]; ylabel="volume [km³]", title="Global firn air content anomaly")
     low = ts .- ts_error
     high = ts .+ ts_error
@@ -979,15 +973,15 @@ begin
     lines!(ax, x, ts.data)
     xlims!(ax, minimum(x) - 30/365, maximum(x) + 30/365)
     display(f)
-    save(joinpath(GGA.pathlocal.figures, "Figure3.png"), f)
+    save(joinpath(GlacierHydrology.pathlocal.figures, "Figure3.png"), f)
 end
 
 
 # create a Table 1 of rates and accelerations
-result_table = GGA.region_fits_table(region_fits, varnames=["dv", "dm",  "net_acc", "runoff", "gsi"], rgi_regions=vcat(1:12, 98, 16:19, 99), no_err=["gsi"], no_acceleration=["gsi",], digits=1)
+result_table = GlacierHydrology.region_fits_table(region_fits, varnames=["dv", "dm",  "net_acc", "runoff", "gsi"], rgi_regions=vcat(1:12, 98, 16:19, 99), no_err=["gsi"], no_acceleration=["gsi",], digits=1)
 
 # save result_table to CSV
-result_table_file = joinpath(GGA.pathlocal.figures, "regional_fits_table.csv")
+result_table_file = joinpath(GlacierHydrology.pathlocal.figures, "regional_fits_table.csv")
 CSV.write(result_table_file, result_table; bom=true)
 
 end

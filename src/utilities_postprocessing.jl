@@ -57,12 +57,37 @@ function discharge_rgi(path2discharge, path2rgi_regions; fractional_error = 0.15
 end
 
 """
-    runs2rgi(path2runs, vars2sum=["dv_altim", "runoff", "fac", "smb", "rain", "acc", "melt", "ec", "refreeze", "dv", "dm", "dm_altim"])
+    is_volume_varname(varname) -> Bool
+
+Whether a geotile or regional variable is a volume, reported in km³, rather than a mass, reported in
+Gt. Volumes are the variables whose name contains `dv` or `fac`: `dv`, `dv_altim` (`dv_synthesis`
+once renamed) and `fac`. Every other variable -- `dm`, `dm_altim`, `smb`, `acc`, `melt`, `refreeze`,
+`runoff`, `rain`, `ec`, `discharge`, `net_acc` and the external `dm_grace`, `dm_glambie` -- is a mass.
+"""
+is_volume_varname(varname) = occursin("dv", varname) || occursin("fac", varname)
+
+# Throw unless a `_gembfit_dv` column is in its reporting unit, which `individual_geotile_synthesis_gembfit_dv`
+# records: km³ for a volume, Gt for a mass.
+function _check_reporting_unit(geotiles0, varname, path)
+    units = colmetadata(geotiles0, varname, "units", nothing)
+    expected = is_volume_varname(varname) ? "km3" : "Gt"
+    units == expected ||
+        error("$path: $(expected == "Gt" ? "mass" : "volume") column $varname has units $(repr(units)), expected $(repr(expected))")
+    return nothing
+end
+
+"""
+    runs2rgi(path2runs, vars2sum=["dv_altim", "runoff", "fac", "smb", "rain", "acc", "melt", "ec", "refreeze", "dv", "dm", "dm_altim", "discharge"])
 
 Aggregate glacier model run data by RGI (Randolph Glacier Inventory) regions.
 
 This function loads data from multiple model runs, aggregates variables by RGI regions,
 and creates special aggregations for HMA (regions 13-15) and global (regions 1-19).
+
+Volumes ([`is_volume_varname`](@ref): `dv`, `dv_altim`, `fac`) are summed in km³ and every other
+variable, a mass, in Gt, the units the `_gembfit_dv` files hold them in. Each column's `"units"`
+metadata is checked, and an unexpected tag throws. The unit of each output is in its `"units"`
+metadata (`"km3"` or `"Gt"`).
 
 Geotiles with no altimetry at all (`dv_altim` NaN at every date) are left out of every sum: they have no
 calibrated fit and carry NaN `dv`, `dm` and `discharge`, which would otherwise make their whole region
@@ -71,10 +96,14 @@ left out of any run hold 1 km² of glacier or more, and they are listed once per
 
 # Arguments
 - `path2runs`: Vector of paths to model run files
+- `physics_member`: the GEMB physics member whose calibrated synthesis is read
+  ([`gemb_physics_path`](@ref)); `gemb_reference_physics_member` by default. [`runs2rgi_physics`](@ref)
+  reads several.
 - `vars2sum`: List of variable names to aggregate (default includes common glacier variables)
 
 # Returns
-- Dictionary containing aggregated data for each variable, with dimensions [run, rgi, date]
+- Dictionary containing aggregated data for each variable, with dimensions [run, rgi, date], each
+  recording its `units` and `gemb_physics_member` in its metadata
 
 # Examples
 ```julia
@@ -82,7 +111,7 @@ julia> regional_sum = runs2rgi(path2runs; vars2sum=["runoff", "dm"])
 julia> runoff_rgi = regional_sum["runoff"]
 ```
 """
-function runs2rgi(path2runs; vars2sum=["dv_altim", "runoff", "fac", "smb", "rain", "acc", "melt", "ec", "refreeze", "dv", "dm", "dm_altim", "discharge"])
+function runs2rgi(path2runs; physics_member=gemb_reference_physics_member, vars2sum=["dv_altim", "runoff", "fac", "smb", "rain", "acc", "melt", "ec", "refreeze", "dv", "dm", "dm_altim", "discharge"])
 
     # read in example file
     drgi = Dim{:rgi}([1:19; 98; 99])
@@ -92,17 +121,20 @@ function runs2rgi(path2runs; vars2sum=["dv_altim", "runoff", "fac", "smb", "rain
 
     regional_sum = Dict() # this needs to be a Dict since variables have different date dimensions
 
-    example_data = FileIO.load(replace(path2runs[1], ".jld2" => "_gembfit_dv.jld2"), "geotiles")
+    gembfit_dv_file(path) = gembfit_dv_path(path, physics_member)
+    example_data = FileIO.load(gembfit_dv_file(path2runs[1]), "geotiles")
     for varname in vars2sum
         ddate = Dim{:date}(colmetadata(example_data, varname, "date"))
-        regional_sum[varname] = fill(NaN, drun, drgi, ddate)
+        units = is_volume_varname(varname) ? "km3" : "Gt"
+        regional_sum[varname] = DD.rebuild(fill(NaN, drun, drgi, ddate);
+                                           metadata=Dict("units" => units, "gemb_physics_member" => physics_member))
     end
 
     unobserved = [String[] for _ in path2runs]
 
     Threads.@threads for i in eachindex(path2runs)
         binned_synthesized_file = path2runs[i]
-        binned_synthesized_dv_file = replace(binned_synthesized_file, ".jld2" => "_gembfit_dv.jld2")
+        binned_synthesized_dv_file = gembfit_dv_file(binned_synthesized_file)
         geotiles0 = FileIO.load(binned_synthesized_dv_file, "geotiles")
 
         no_altim = [all(isnan, x) for x in geotiles0.dv_altim]
@@ -113,6 +145,8 @@ function runs2rgi(path2runs; vars2sum=["dv_altim", "runoff", "fac", "smb", "rain
             unobserved[i] = geotiles0.id[no_altim]
             geotiles0 = geotiles0[.!no_altim, :]
         end
+
+        foreach(v -> _check_reporting_unit(geotiles0, v, binned_synthesized_dv_file), vars2sum)
 
         # group by rgi and sum
         geotiles_reg = groupby(geotiles0, :rgiid)
@@ -166,6 +200,9 @@ The function handles special calculations for derived variables:
 - `net_acc`: Calculated as accumulation minus evaporation/condensation
 - `gsi`: Glacier sustainability index, calculated as (runoff + discharge) / net_acc
 
+`regional_sum` is in the units [`runs2rgi`](@ref) returns (masses in Gt, volumes in km³) and
+`discharge_rgi` in Gt yr⁻¹, so every term of `net_acc` and `gsi` is in Gt.
+
 # Examples
 ```julia
 julia> daterange = DateTime(2000, 3, 1)..DateTime(2024, 12, 15)
@@ -203,7 +240,7 @@ function rgi_trends(regional_sum::AbstractDict, discharge_rgi, daterange)
                 end
 
                 # first fit linear trend and seasonal [this creates less spread in linear fit as acceleration fixed to zero]
-                dm_fit = curve_fit(offset_trend_seasonal2, x, y, p3)
+                dm_fit = curve_fit(offset_trend_seasonal2, x, y, p_offset_trend_seasonal)
                 region_fit[At(varname), At(binned_synthesized_file), At(rgi), At("trend")] = dm_fit.param[2]
 
                 # then fit linear trend and acceleration and seasonal
@@ -232,6 +269,23 @@ function rgi_trends(regional_sum::AbstractDict, discharge_rgi, daterange)
     end
 
     return region_fit
+end
+
+"""
+    mass_closure_residual(region_fits; rgi, parameter="trend", discharge="discharge") -> Float64
+
+`acc - runoff - ec - discharge - dm` for region `rgi` of `region_fits` (dimensions varname, rgi,
+parameter, error; the reference values at `error=false` are used), in Gt yr⁻¹ for the trend.
+
+GEMB's surface mass balance is `smb = acc - runoff - ec` (`gemb_add_derived_vars!`, with
+`runoff = melt - refreeze`), and the modelled mass change is `dm = smb - discharge`, so the residual is
+zero to the fitting tolerance when every term is in Gt ([`runs2rgi`](@ref)) and `discharge` names the
+discharge that `dm` subtracts, i.e. the summed geotile `discharge` column. The trend and acceleration
+fits are linear in the data, so the fit of the sum is the sum of the fits.
+"""
+function mass_closure_residual(region_fits; rgi, parameter="trend", discharge="discharge")
+    fit(varname) = region_fits[varname=At(varname), rgi=At(rgi), parameter=At(parameter), error=At(false)]
+    return fit("acc") - fit("runoff") - fit("ec") - fit(discharge) - fit("dm")
 end
 
 """
@@ -276,7 +330,7 @@ function rgi_trends(da::AbstractDimArray, daterange)
     for rgi in drgi
 
         # first fit linear trend and seasonal [this creates less spread in linear fit as acceleration fixed to zero]
-        dm_fit = curve_fit(offset_trend_seasonal2, d, da[At(rgi), minimum(daterange)..maximum(daterange)], p3)
+        dm_fit = curve_fit(offset_trend_seasonal2, d, da[At(rgi), minimum(daterange)..maximum(daterange)], p_offset_trend_seasonal)
         region_fit[At(rgi), At("trend")] = dm_fit.param[2]
 
         # then fit linear trend and acceleration and seasonal
@@ -725,7 +779,7 @@ function error_bar_table(region_fits; varnames=nothing, params=["trend", "accele
 
     ismass = falses(dims(region_fits, :varname))
     for varname in varnames
-        ismass[varname = At(varname)] = !(occursin("dv", varname) || occursin("fac", varname))
+        ismass[varname = At(varname)] = !is_volume_varname(varname)
     end
 
 
@@ -853,8 +907,7 @@ function region_fits_table(region_fits; varnames=nothing, rgi_regions=nothing, n
     # Initialize columns for each varname (trend first, then acceleration, then amplitude if requested)
     for varname in varnames
         # Determine unit based on variable type
-        ismass = !(occursin("dv", varname) || occursin("fac", varname))
-        base_unit = ismass ? "Gt" : "km³"
+        base_unit = is_volume_varname(varname) ? "km³" : "Gt"
 
         # Create column labels
         trend_label = Symbol("$(varname)_trend_[$(base_unit)/yr]")
@@ -877,8 +930,7 @@ function region_fits_table(region_fits; varnames=nothing, rgi_regions=nothing, n
     for (i, rgi) in enumerate(rgi_regions)
         for varname in varnames
             # Determine unit based on variable type
-            ismass = !(occursin("dv", varname) || occursin("fac", varname))
-            base_unit = ismass ? "Gt" : "km³"
+            base_unit = is_volume_varname(varname) ? "km³" : "Gt"
 
             # Extract and format trend values
             trend_val = region_fits[At(varname), At(rgi), At("trend"), At(false)]
@@ -994,17 +1046,10 @@ function geotile2dimarray_kgm2(
 
     for varname in vars2extract
 
-        if varname == "dv"
-            # convert from km3 to m
-            geotile_out[At(varname), :, :] = reduce(hcat, getindex.(geotiles0[:, varname], (valid,)) ./ geotiles0[:, :area_km2] * 1000 * 1000 * varunits[varname])'
-
-        elseif varname == "dm"
-            # convert from Gt to kg/m²
-            geotile_out[At(varname), :, :] = reduce(hcat, getindex.(geotiles0[:, varname], (valid,)) ./ geotiles0[:, :area_km2] * 1000 * 1000 * varunits[varname])'
-        else
-            # convert from km3 of ice to kg/m²
-            geotile_out[At(varname), :, :] = reduce(hcat, getindex.(geotiles0[:, varname], (valid,)) ./ geotiles0[:, :area_km2] * δice * 1000 * varunits[varname])'
-        end
+        _check_reporting_unit(geotiles0, varname, binned_synthesized_dv_file)
+        # Gt / km² is 10⁶ kg m⁻²; `fac` (km³) is taken to kg m⁻² at `δice`.
+        factor = varname == "fac" ? δice * 1000 : 1000 * 1000
+        geotile_out[At(varname), :, :] = reduce(hcat, getindex.(geotiles0[:, varname], (valid,)) ./ geotiles0[:, :area_km2] * factor * varunits[varname])'
     end
 
     if !isnothing(reference_period)
@@ -1277,6 +1322,8 @@ function glacier_summary_file(
         ds.attrib["title"] = "cumulative glacier mass flux outputs from Gardner et al. 2025"
         ds.attrib["version"] = "beta - " * Dates.format(now(), "yyyy-mm-dd")
         ds.attrib["featureType"] = "timeSeries"
+        # The glacier inventory the geotile values were spread over; `glacier_routing` checks it.
+        ds.attrib["surface_mask"] = String(surface_mask)
 
         println("glacier output saved to $glacier_summary_file")
     end
@@ -1315,8 +1362,16 @@ julia> # Writes Arrow and GeoPackage files to the project output directory
 function gembfit_dv2gpkg(binned_synthesized_dv_file; outfile_prefix="Gardner2025_geotiles_rates", datelimits=(DateTime(2000, 3, 1), DateTime(2025, 1, 1)))
     # export trends and amplitudes for reference_run
 
-    # data is in units of km3 of ice equivalent at `δice`
+    # Masses are Gt and volumes km³. The archive reports the components in km³ (m) of ice equivalent at
+    # `δice` and `dm`, `dm_altim` in Gt (m w.e.), so the components are converted back.
     geotiles0 = FileIO.load(binned_synthesized_dv_file, "geotiles")
+    for v in names(geotiles0)
+        haskey(colmetadata(geotiles0, v), "units") || continue
+        _check_reporting_unit(geotiles0, v, binned_synthesized_dv_file)
+        if !is_volume_varname(v) && !(v in ("dm", "dm_altim"))
+            geotiles0[!, v] = [x .* (1000 / δice) for x in geotiles0[!, v]]
+        end
+    end
 
     altim_cols = names(geotiles0)[occursin.("_altim", names(geotiles0))]
     rename!(geotiles0, altim_cols .=> replace.(altim_cols, "_altim" => "_synthesis"))
@@ -1405,18 +1460,18 @@ julia> region_fits = ensemble_summary(path2runs_synthesized, ensemble_reference_
 julia> runoff_trend_ref = region_fits[At("runoff"), :, At("trend"), At(false)]
 ```
 """
-function ensemble_summary(path2runs_synthesized, ensemble_reference_file; dates4trend=[DateTime(2000, 3, 1), DateTime(2024, 12, 15)], error_quantile=0.95, error_scaling=1.5, discharge_fractional_error=0.15)
+function ensemble_summary(path2runs_synthesized, ensemble_reference_file; physics_member=gemb_reference_physics_member, dates4trend=[DateTime(2000, 3, 1), DateTime(2024, 12, 15)], error_quantile=0.95, error_scaling=1.5, discharge_fractional_error=0.15)
 
     paths = pathlocal
 
     # load discharge for each RGI [<1s]
-    path2discharge = paths[:discharge_global]
+    path2discharge = discharge_global_file(binned_filled_fileparts(ensemble_reference_file).surface_mask)
     path2rgi_regions = paths[:rgi6_regions_shp]
 
     discharge_rgi0 = discharge_rgi(path2discharge, path2rgi_regions; fractional_error=discharge_fractional_error)
     
     # load results for all runs for each RGI [18s]
-    runs_rgi = runs2rgi(path2runs_synthesized)
+    runs_rgi = runs2rgi(path2runs_synthesized; physics_member)
     runs_rgi_fits = rgi_trends(runs_rgi, discharge_rgi0, dates4trend)
     region_fits = region_fit_ref_and_err(runs_rgi_fits, ensemble_reference_file; error_quantile, error_scaling, discharge=discharge_rgi0)
 

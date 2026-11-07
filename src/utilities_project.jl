@@ -4,189 +4,132 @@
 # have to agree: a GEMB volume converted to mass with a different density carries that ratio as a bias.
 const δice = 917;
 const seasonality_weight = 85/100
-# Strength of the forcing-prior penalty (`origin_penalty_mode = :prior`): the cost is multiplied by
-# 1 + wd × d, d the Mahalanobis distance from `gemb_forcing_prior`. 0.35 is the largest value within 1% of the
-# best held-out skill in temporal cross-validation; see notes/methods_2026-10_seasonal_cycle_and_calibration.md.
-const distance_from_origin_penalty = 35 / 100
 # Only used by the `:legacy` penalty mode.
 const ΔT_to_pscale_weight = 50/100
-
-# Empirical prior on the GEMB forcing corrections for `origin_penalty_mode = :prior`: the area-weighted
-# centre, spread and correlation of the unpenalized fits of the well-constrained geotile groups (sd of
-# log pscale < 0.15 and of ΔT < 0.5 K within 5% of the minimum cost; 88% of ice area) for the reference
-# ensemble member, fill set 6, GEMB run 8. See notes/methods_2026-10_seasonal_cycle_and_calibration.md.
-const gemb_forcing_prior = (pscale=1.60, log_pscale_sd=0.45, ΔT=2.20, ΔT_sd=1.65, corr=0.50)
 const ocean_area_km2 = 362.5 * 1E6
 
-# An alternative binning must be a distinctly named function, not a second `project_mscale_bins()`
-# method: a duplicate empty signature is silently shadowed, and method overwriting makes the module
-# unprecompilable, forcing a from-source rebuild on every load.
+"""
+    reference_surface_mask() -> String
+
+Glacier inventory (`"glacier"` for RGI 6.0, `"glacier_rgi7"` for RGI 7.0) of the reference ensemble
+member, `GVC.reference_member()`. The glacier-level products spread that member's geotile values over
+this inventory's glaciers.
+"""
+reference_surface_mask() = binned_filled_fileparts(GVC.reference_member()).surface_mask
 
 """
-    project_mscale_bins()
+    ensemble_paths(; geotile_width=2, physics_member=gemb_reference_physics_member) -> NamedTuple
 
-Define melt-scaling bins (log-style spacing).
+File paths of every altimetry ensemble member of the GlacierVolumeChange dataset
+(`GVC.ensemble_members`) and of the reference member (`GVC.reference_member`), in each form the
+pipeline reads or writes:
 
-Used only by `process_gemb_geotiles`, whose forcing axis is a melt multiplier centred on 1. The tile
-path's axis is a temperature offset in K centred on 0 and takes its values from the data, so it does not
-come through here.
-
-# Returns
-- Tuple containing (mscale_range, mscale_center) with values [1/6, 1/4, 1/2, 2, 4, 6] and centers.
-
-# Examples
-```julia
-julia> mscale_range, mscale_center = project_mscale_bins()
-```
+- `filled`, `filled_ref`: the members' filled (`*_aligned.jld2`) files, which name the members;
+- `synthesized`, `synthesized_ref`: their synthesized files, the input to the GEMB calibration;
+- `gembfit_dv`, `gembfit_dv_ref`: their calibrated syntheses for `physics_member`
+  ([`gemb_physics_path`](@ref));
+- `surface_masks`: the glacier inventories among the members; `surface_mask_ref`: the reference
+  member's ([`reference_surface_mask`](@ref)).
 """
-function project_mscale_bins()
-
-    mscale_range = [1/6, 1/4, 1/2, 2, 4, 6]
-    mscale_center = [1/5, 1/3, 1, 3, 5]
-
-    return mscale_range, mscale_center
+function ensemble_paths(; geotile_width=2, physics_member=gemb_reference_physics_member)
+    filled = GVC.ensemble_members(GVC.VolumeDatasetConfig(; geotile_width))
+    filled_ref = GVC.reference_member()
+    filled_ref in filled || error("the reference member $(filled_ref) is not among the ensemble members")
+    gembfit_file(f) = gembfit_dv_path(GVC.synthesized_path(f), physics_member)
+    return (;
+        filled, filled_ref,
+        synthesized=GVC.synthesized_path.(filled), synthesized_ref=GVC.synthesized_path(filled_ref),
+        gembfit_dv=gembfit_file.(filled), gembfit_dv_ref=gembfit_file(filled_ref),
+        surface_masks=unique(getproperty.(binned_filled_fileparts.(filled), :surface_mask)),
+        surface_mask_ref=reference_surface_mask(),
+    )
 end
+# The GEMB physics member (GEMB_GlacierSims `physics_member`) the reported fluxes are calibrated
+# against: GEMB_GlacierSims' default, `S-kfit-table`. That is GEMB's default snow set (Flanner & Zender
+# 2006 grain growth, SNOTEL-calibrated van Kampenhout et al. 2017 fresh snow, Crocus densification with
+# destructive metamorphism at 100 kg m-3), the fitted band decoupling factor, the regional background
+# impurity table, ERA5-Land wind and no precipitation gradient. Other members are sensitivities to it.
+const gemb_reference_physics_member = "S-kfit-table"
+
+# The forcing grid GEMB run 10 (the pilot sweep) is calibrated on: 7 temperature offsets [K] by 9
+# precipitation scalings. Pilot tiles run on the dense grid carry these nodes among others and are read
+# at these alone, so every pilot tile enters the ensemble on the same nodes.
+const gemb_pilot_forcing_grid = (; pscale=[0.25, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0],
+                                   ΔT=[-3.0, -1.5, 0.0, 1.5, 3.0, 4.5, 6.0])
+
+# The geotile-mean pscale nodes a precipitation-gradient member of run 10 is calibrated on. Each band is
+# read at pscale · m_b, which must stay on the tiles' 0.25 … 6 axis; at 2.5 % per 100 m the pilot tiles'
+# bands do so for geotile-mean pscale 0.75 … 3 (the tallest, N28_E086 and N60_W140, bound it).
+const gemb_pilot_gradient_forcing_grid = (; pscale=[0.75, 1.0, 1.5, 2.0, 3.0],
+                                            ΔT=gemb_pilot_forcing_grid.ΔT)
+
+# The GEMB runs: where each sweep's tiles are, whether it covers every glacierized tile, and the
+# calibration prior derived from its own unpenalized fits.
+#
+# - `sweep`, `suffix`: the tile directory under `$CLIMATE_CACHE` and the tag of its combined files.
+# - `partial_coverage`: the sweep covers a subset of tiles. Such a run is binned on the geotiles with a
+#   tile of their own, calibrated on the geotile groups wholly inside it, and skips the fitted-pscale
+#   check of the reference geotiles.
+# - `allows_gradient`: precipitation-gradient members are defined on its tiles.
+# - `forcing_prior`, `distance_from_origin_penalty`: the forcing prior `(; pscale, log_pscale_sd, ΔT,
+#   ΔT_sd, corr)` and its weight `wd`, re-derived for each run by the temporal cross-validation of
+#   notes/methods_2026-10_seasonal_cycle_and_calibration.md §4 from that run's unpenalized fits.
+#   `nothing` and 0 until then: the calibration is unpenalized.
+const GEMB_RUNS = Dict(
+    9 => (; sweep="tile_runs_v2", suffix="v2", partial_coverage=false, allows_gradient=false,
+            forcing_prior=nothing, distance_from_origin_penalty=0.0),
+    10 => (; sweep="tile_runs_pilot", suffix="pilot", partial_coverage=true, allows_gradient=true,
+             forcing_prior=nothing, distance_from_origin_penalty=0.0),
+)
 
 """
-    gemb_info(; gemb_run_id=4)
+    gemb_info(; gemb_run_id=9, physics_member)
 
-Get GEMB (Glacier Energy and Mass Balance) model configuration for a specific run.
+Configuration of a GEMB_GlacierSims tile sweep.
 
 # Arguments
-- `gemb_run_id::Int`: GEMB run identifier (1-4, default: 4)
+- `gemb_run_id::Int`: 9, the production sweep in `\$CLIMATE_CACHE/tile_runs_v2`, or 10, the pilot sweep
+  in `\$CLIMATE_CACHE/tile_runs_pilot` on its own forcing grid and tile subset ([`GEMB_RUNS`](@ref)).
+- `physics_member`: the GEMB_GlacierSims physics member (e.g. `"S-kfit-table"`, see
+  [`gemb_reference_physics_member`](@ref)). Each run holds one tile sweep per member, under
+  `<tile_dir>/<tile member>`, with a combined file of its own, so no tile of another member or sweep can
+  enter the ensemble. A run-10 member with a precipitation gradient (`"<tile member>-g<g>"`,
+  [`gemb_physics_member_parts`](@ref)) reads its tile member's directory, has a combined file of its own
+  and the forcing grid [`gemb_pilot_gradient_forcing_grid`](@ref); run 9 refuses one.
 
 # Returns
-- Named tuple containing GEMB configuration parameters:
-  - `gemb_folder`: Path(s) to GEMB data folders
-  - `file_uniqueid`: Unique file identifier string
-  - `elevation_delta`: Array of elevation adjustments [m]
-  - `precipitation_scale`: Array of precipitation scaling factors
-  - `filename_gemb_combined`: Output file path for combined data
-
-# Throws
-- `ErrorException`: If gemb_run_id is not recognized
+Named tuple with
+- `gemb_run_id`, `physics_member`: the run and the checked member id;
+- `tile_dir`: directory of the member's tile NetCDF files;
+- `filename_gemb_combined`: path from which the per-mask geotile ensemble files are named;
+- `forcing_grid`: the `(; pscale, ΔT)` nodes the ensemble is read on, or `nothing` for the tiles' own grid;
+- `partial_coverage`, `forcing_prior`, `distance_from_origin_penalty`: the run's settings
+  ([`GEMB_RUNS`](@ref)).
 
 # Examples
 ```julia
-julia> gembinfo = gemb_info(; gemb_run_id=4)
-julia> dpscale = gembinfo.precipitation_scale
+julia> gembinfo = gemb_info(; gemb_run_id=9, physics_member=gemb_reference_physics_member)
 ```
 """
-function gemb_info(; gemb_run_id = 4)
-
-    if gemb_run_id == 1
-        dpscale = Dim{:pscale}(["p1"]) # do not change order as these are lookup values
-        dΔheight = Dim{:Δheight}(["t1"])
-        elevation_delta = DimArray([0], dΔheight) # do not change order as these are lookup values
-        precipitation_scale = DimArray([1], dpscale) # do not change order as these are lookup values
-        file_uniqueid = "rv1_0_19500101_20231231"
-        gemb_info = (;
-            gemb_folder = ["/home/schlegel/Share/GEMBv1/"],
-            file_uniqueid,
-            elevation_delta,
-            precipitation_scale,
-            filename_gemb_combined = "/mnt/bylot-r3/data/gemb/raw/$file_uniqueid.jld2",
-            modify_melt_only = false
-        )
-    elseif gemb_run_id == 2
-        dpscale = Dim{:pscale}(["p1", "p2", "p3", "p4", "p5", "p6"]) # do not change order as these are lookup values
-        dΔheight = Dim{:Δheight}(["t1", "t2", "t3", "t4", "t5", "t6", "t7", "t8", "t9"])
-        elevation_delta = DimArray([-1000, -750, -500, -250, 0, 250, 500, 750, 1000], dΔheight) # do not change order as these are lookup values
-        precipitation_scale = DimArray([0.5, 1, 1.5, 2, 5, 10], dpscale) # do not change order as these are lookup values
-        file_uniqueid = "1979to2023_820_40_racmo_grid_lwt"
-        gemb_info = (;
-            gemb_folder = "/home/schlegel/Share/GEMBv1/Alaska_sample/v1/",
-            file_uniqueid,
-            elevation_delta,
-            precipitation_scale,
-            filename_gemb_combined = "/mnt/bylot-r3/data/gemb/raw/$file_uniqueid.jld2",
-            modify_melt_only = false
-        )
-    elseif gemb_run_id == 3
-        dpscale = Dim{:pscale}(["p1", "p2", "p3", "p4", "p5"]) # do not change order as these are lookup values
-        dΔheight = Dim{:Δheight}(["t1", "t2", "t3", "t4", "t5"])
-        elevation_delta = DimArray([-200, 0, 200, 500, 1000], dΔheight) # do not change order as these are lookup values
-        precipitation_scale = DimArray([0.75, 1, 1.25, 1.5, 2], dpscale) # do not change order as these are lookup values
-
-        gemb_info = (;
-            gemb_folder = ["/mnt/bylot-r3/data/gemb/mat/no_lw_correction/"],
-            file_uniqueid="1979to2023_820_40_",
-            elevation_delta,
-            precipitation_scale,
-            filename_gemb_combined = "/mnt/bylot-r3/data/gemb/raw/FAC_forcing_glaciers_1979to2023_820_40_racmo_grid_lwt_e97_0.jld2",
-            modify_melt_only = false
-        )
-    elseif gemb_run_id == 4
-        dpscale = Dim{:pscale}(["p1", "p2", "p3", "p4", "p5", "p6", "p7", "p8"]) # do not change order as these are lookup values
-        dΔheight = Dim{:Δheight}(["t1", "t2", "t3", "t4", "t5", "t6", "t7", "t8"])
-        elevation_delta = DimArray([-200, 0, 200, 500, 1000, -2000, -500, 2000], dΔheight) # do not change order as these are lookup values
-        precipitation_scale = DimArray([0.75, 1, 1.25, 1.5, 2, 0.25, 3, 4], dpscale) # do not change order as these are lookup values
-
-        gemb_info = (;
-            gemb_folder=["/mnt/bylot-r3/data/gemb/mat/no_lw_correction/"],
-            file_uniqueid="1979to2024_820_40_",
-            elevation_delta,
-            precipitation_scale,
-            filename_gemb_combined = "/mnt/bylot-r3/data/gemb/raw/FAC_forcing_glaciers_1979to2024_820_40_racmo_grid_lwt_e97_0.jld2",
-            modify_melt_only = false
-        )
-    elseif gemb_run_id == 5
-        dpscale = Dim{:pscale}(["p1", "p2", "p3", "p4", "p5", "p6", "p7", "p8"]) # do not change order as these are lookup values
-        dΔheight = Dim{:Δheight}(["t1", "t2", "t3", "t4", "t5", "t6", "t7", "t8"])
-        elevation_delta = DimArray([-200, 0, 200, 500, 1000, -2000, -500, 2000], dΔheight) # do not change order as these are lookup values
-        precipitation_scale = DimArray([0.75, 1, 1.25, 1.5, 2, 0.25, 3, 4], dpscale) # do not change order as these are lookup values
-
-        gemb_info = (;
-            gemb_folder=["/mnt/bylot-r3/data/gemb/mat/lw_correction/"],
-            file_uniqueid="1979to2024_820_40_",
-            elevation_delta,
-            precipitation_scale,
-            filename_gemb_combined="/mnt/bylot-r3/data/gemb/raw/FAC_forcing_glaciers_1979to2024_820_40_lwt_e97_0_corrected_dmelt.jld2",
-            modify_melt_only = true
-        )
-    elseif gemb_run_id == 6
-        dpscale = Dim{:pscale}(["p1", "p2", "p3", "p4", "p5", "p6", "p7", "p8"]) # do not change order as these are lookup values
-        dΔheight = Dim{:Δheight}(["t1", "t2", "t3", "t4", "t5", "t6", "t7", "t8"])
-        elevation_delta = DimArray([-200, 0, 200, 500, 1000, -2000, -500, 2000], dΔheight) # do not change order as these are lookup values
-        precipitation_scale = DimArray([0.75, 1, 1.25, 1.5, 2, 0.25, 3, 4], dpscale) # do not change order as these are lookup values
-
-        gemb_info = (;
-            gemb_folder=["/mnt/bylot-r3/data/gemb/mat/lw_correction/"],
-            file_uniqueid="1979to2024_820_40_",
-            elevation_delta,
-            precipitation_scale,
-            filename_gemb_combined="/mnt/bylot-r3/data/gemb/raw/FAC_forcing_glaciers_1979to2024_820_40_lwt_e97_0_corrected.jld2",
-            modify_melt_only=false
-        )
-    elseif gemb_run_id == 7
-        # `GEMB_GlacierSims` tile NetCDF rather than point `.mat` files. The forcing axes live in the
-        # data and are read from it by `gemb_tile_forcing_grid`, so there is nothing to declare here:
-        # the tiles are complete over the height range, so `elevation_delta` -- which existed to fake
-        # elevation classes from sparse point runs -- has no counterpart. `tile_dir` replaces
-        # `gemb_folder`, and `read_gemb_files` is not used on this path.
-        gemb_info = (;
-            tile_dir=joinpath(get(ENV, "CLIMATE_CACHE", "/mnt/bylot-r3/data/era5land"), "tile_runs"),
-            precipitation_scale=nothing,
-            filename_gemb_combined="/mnt/bylot-r3/data/gemb/raw/gemb_glacier_sims_tiles_1950to2026.jld2",
-            modify_melt_only=false
-        )
-    elseif gemb_run_id == 8
-        # Same tile-based path as run 7, over a wider ΔT axis: `[-3, -1, -0.5, 0, 0.5, 1, 3, 4, 5, 6]`
-        # against run 7's `[-3, -1, -0.5, 0, 0.5, 1, 3]`. `merge_tile_perturbations` built each tile here
-        # by joining a +4/+5/+6 supplementary sweep onto the corresponding run-7 tile, so the two trees
-        # share every point run 7 has and this one only adds coverage above +3 K, where `gemb_calibration`
-        # pins a fitted ΔT at the grid ceiling for a sizeable share of global glacier area under run 7.
-        gemb_info = (;
-            tile_dir=joinpath(get(ENV, "CLIMATE_CACHE", "/mnt/bylot-r3/data/era5land"), "tile_runs_merged"),
-            precipitation_scale=nothing,
-            filename_gemb_combined="/mnt/bylot-r3/data/gemb/raw/gemb_glacier_sims_tiles_1950to2026_merged.jld2",
-            modify_melt_only=false
-        )
-    else
-        error("unrecognized gemb_run_id: $gemb_run_id")
-    end
-
-    return gemb_info
+function gemb_info(; gemb_run_id=9, physics_member)
+    haskey(GEMB_RUNS, gemb_run_id) ||
+        error("unrecognized gemb_run_id: $gemb_run_id (runs $(join(sort(collect(keys(GEMB_RUNS))), " and ")) are defined)")
+    run = GEMB_RUNS[gemb_run_id]
+    member = check_gemb_physics_member(physics_member)
+    parts = gemb_physics_member_parts(member)
+    gradient = parts.precipitation_gradient > 0
+    gradient && !run.allows_gradient &&
+        error("precipitation-gradient members ($(repr(member))) are defined for the pilot sweep (GEMB " *
+              "run 10) only; run $(gemb_run_id) needs a geotile-mean pscale axis its tiles' bands stay on first")
+    return (;
+        gemb_run_id,
+        physics_member=member,
+        tile_dir=joinpath(get(ENV, "CLIMATE_CACHE", "/mnt/bylot-r3/data/era5land"), run.sweep, parts.tile_member),
+        filename_gemb_combined="/mnt/bylot-r3/data/gemb/gemb_glacier_sims_tiles_1950to2026_$(run.suffix)_$(member).jld2",
+        forcing_grid=!run.partial_coverage ? nothing :
+                     gradient ? gemb_pilot_gradient_forcing_grid : gemb_pilot_forcing_grid,
+        run.partial_coverage, run.forcing_prior, run.distance_from_origin_penalty,
+    )
 end
 
 
@@ -261,7 +204,7 @@ function gemb_altim_cost(x, dv_altim, dv_gemb, kwargs)
 end
 
 """
-    model_fit_cost_function(res, pscale, ΔT; seasonality_weight, distance_from_origin_penalty, ΔT_to_pscale_weight, calibrate_to=:all, is_scaling_factor, origin_penalty_mode=:prior, forcing_prior=gemb_forcing_prior)
+    model_fit_cost_function(res, pscale, ΔT; seasonality_weight, distance_from_origin_penalty, ΔT_to_pscale_weight, calibrate_to=:all, is_scaling_factor, origin_penalty_mode=:prior, forcing_prior=nothing)
 
 Compute a composite cost function for fitting a model to altimetry data, incorporating trend, seasonality, and parameter penalties.
 
@@ -279,8 +222,11 @@ Compute a composite cost function for fitting a model to altimetry data, incorpo
   distance of (log pscale, ΔT) from `forcing_prior`, i.e. the distance in prior standard deviations
   allowing for the correlation between the two. `:legacy` multiplies it by `1 + wd * d`, `d` the weighted
   distance from the no-op point (1, 0).
+- `design`: a [`seasonal_design`](@ref) of `res`'s dates, which a caller evaluating many residuals on
+  one date axis builds once; `nothing` builds it here.
 - `forcing_prior`: `(; pscale, log_pscale_sd, ΔT, ΔT_sd, corr)`, the centre, spreads and correlation used
-  by `origin_penalty_mode = :prior`; defaults to `gemb_forcing_prior`.
+  by `origin_penalty_mode = :prior`, or `nothing`, which only a zero `distance_from_origin_penalty`
+  accepts.
 
 # Returns
 A tuple `cost` where:
@@ -299,13 +245,13 @@ A tuple `cost` where:
 julia> cost = model_fit_cost_function(res, 1.0, 0.0; seasonality_weight=0.85, distance_from_origin_penalty=0.35, ΔT_to_pscale_weight=0.5)
 ```
 """
-function model_fit_cost_function(res, pscale, ΔT; seasonality_weight, distance_from_origin_penalty, ΔT_to_pscale_weight, calibrate_to=:all, is_scaling_factor=Dict("pscale" => true, "ΔT" => false), origin_penalty_mode=:prior, forcing_prior=gemb_forcing_prior)
+function model_fit_cost_function(res, pscale, ΔT; seasonality_weight, distance_from_origin_penalty, ΔT_to_pscale_weight, calibrate_to=:all, is_scaling_factor=Dict("pscale" => true, "ΔT" => false), origin_penalty_mode=:prior, forcing_prior=nothing, design=nothing)
 
     origin_penalty_mode in (:legacy, :prior) || error("origin_penalty_mode must be :legacy or :prior, got $origin_penalty_mode")
 
     # remove linear trend to emphasize seasonality
     if calibrate_to != :five_year
-        fit = ts_seasonal_model(res; interval=nothing);
+        fit = ts_seasonal_model(res; design);
     else
         res0 = groupby(res, :date => Bins(year, 5))
         res0 = mean.(res0)
@@ -329,8 +275,10 @@ function model_fit_cost_function(res, pscale, ΔT; seasonality_weight, distance_
     end
 
     if origin_penalty_mode == :prior
+        iszero(distance_from_origin_penalty) && return cost
         (is_scaling_factor["pscale"] && !is_scaling_factor["ΔT"]) ||
             error("origin_penalty_mode = :prior assumes a multiplicative pscale and an additive ΔT")
+        isnothing(forcing_prior) && error("a forcing-prior penalty needs a forcing_prior")
         return cost * (1 + distance_from_origin_penalty * _forcing_prior_distance(pscale, ΔT, forcing_prior))
     else
         # Distance of a scaling factor from its no-op value of 1, measured symmetrically so that

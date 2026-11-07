@@ -1,5 +1,5 @@
 """
-Test helper functions and utilities for GlobalGlacierAnalysis.jl tests
+Test helper functions and utilities for GlacierHydrology.jl tests
 """
 
 using Dates
@@ -30,7 +30,7 @@ function synthetic_elevation_timeseries(;
     phase=0.0,
     noise_sigma=0.1
 )
-    t = GGA.decimalyear.(dates) .- minimum(GGA.decimalyear.(dates))
+    t = GlacierHydrology.decimalyear.(dates) .- minimum(GlacierHydrology.decimalyear.(dates))
     signal = trend .* t .+ amplitude .* sin.(2π .* (t .+ phase))
     noise = noise_sigma .* randn(length(t))
     return signal .+ noise
@@ -145,4 +145,32 @@ Check approximate equality with relative and absolute tolerance.
 """
 function approx_equal(a, b; rtol=1e-6, atol=1e-8)
     return isapprox(a, b; rtol=rtol, atol=atol)
+end
+
+"""
+    write_mock_volume_product(member, dv, area) -> String
+
+Write the variables and attributes that `GlacierVolumeChange.read_volume` reads to
+`GlacierVolumeChange.volume_product_path(member)` and return that path.
+
+- `dv`: `DimArray(geotile, date)` in km³; its dates must be a run of `GVC.project_date_bins` centers.
+- `area`: `DimArray(geotile, height)` in km²; its heights must be a run of `GVC.project_height_bins` centers.
+"""
+function write_mock_volume_product(member, dv, area)
+    path = GlacierHydrology.GVC.volume_product_path(member)
+    attrib = ["surface_mask" => "glacier", "reference_dem" => "best", "curvature_correct" => "true",
+              "binning_method" => "nmad5", "fill_param" => 1, "amplitude_correct" => "true",
+              "binned_folder" => "mock", "project_id" => "v01"]
+    GlacierHydrology.NCDatasets.NCDataset(path, "c"; attrib) do ds
+        GlacierHydrology.NCDatasets.defDim(ds, "geotile", size(dv, 1))
+        GlacierHydrology.NCDatasets.defDim(ds, "time", size(dv, 2))
+        GlacierHydrology.NCDatasets.defDim(ds, "height", size(area, 2))
+        GlacierHydrology.NCDatasets.defVar(ds, "geotile", collect(dims(dv, :geotile)), ("geotile",))
+        GlacierHydrology.NCDatasets.defVar(ds, "time", DateTime.(collect(dims(dv, :date))), ("time",);
+                                           attrib=["units" => "days since 1990-01-01"])
+        GlacierHydrology.NCDatasets.defVar(ds, "height", collect(dims(area, :height)), ("height",))
+        GlacierHydrology.NCDatasets.defVar(ds, "dv", parent(dv), ("geotile", "time"))
+        GlacierHydrology.NCDatasets.defVar(ds, "area", parent(area), ("geotile", "height"))
+    end
+    return path
 end

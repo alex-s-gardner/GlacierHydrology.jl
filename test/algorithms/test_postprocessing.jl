@@ -6,8 +6,8 @@ ensemble statistics, and regional summary generation.
 """
 
 using Test
-using GlobalGlacierAnalysis
-import GlobalGlacierAnalysis as GGA
+using GlacierHydrology
+import GlacierHydrology
 import GlacierVolumeChange as GVC
 using DimensionalData
 import DimensionalData as DD
@@ -393,7 +393,7 @@ include("../fixtures/synthetic_timeseries.jl")
         rf[varname=At("runoff"), rgi=At(2), parameter=At("trend"), error=At(false)] = -50.0
         rf[varname=At("runoff"), rgi=At(2), parameter=At("trend"), error=At(true)] = 30.0    # above 20%: kept
         rf[varname=At("dm"), rgi=At(1), parameter=At("trend"), error=At(true)] = 7.0         # not in varnames
-        GGA.region_min_frac_error!(rf; fractional_error_min=0.2, varnames=["runoff"], parameters=["trend"])
+        GlacierHydrology.region_min_frac_error!(rf; fractional_error_min=0.2, varnames=["runoff"], parameters=["trend"])
         @test rf[varname=At("runoff"), rgi=At(1), parameter=At("trend"), error=At(true)] ≈ 20.0
         @test rf[varname=At("runoff"), rgi=At(2), parameter=At("trend"), error=At(true)] ≈ 30.0
         @test rf[varname=At("dm"), rgi=At(1), parameter=At("trend"), error=At(true)] ≈ 7.0
