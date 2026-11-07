@@ -537,9 +537,10 @@ for each geotile, applying per-geotile pscale and ΔT from gemb_fit.
 
 # Returns
 - DataFrame of geotiles with time series columns (dv_altim, runoff, fac, smb, etc.) and metadata.
-  Each column's `"units"` metadata is `"Gt"` for `dm` and `dm_altim` and `"km3 [i.e.]"` for every
-  other column, including the GEMB mass components and `discharge`; [`runs2rgi`](@ref) converts the
-  masses among them to Gt when it builds regional sums.
+  Each column is in its reporting unit, recorded as its `"units"` metadata: `"km3"` for the volumes
+  `dv`, `dv_altim` and `fac` ([`is_volume_varname`](@ref)) and `"Gt"` for every mass, the GEMB
+  components, `discharge`, `dm` and `dm_altim`. GEMB volumes are km³ of ice equivalent and are
+  converted with `δice/1000` Gt per km³, here only.
 
 # Examples
 ```julia
@@ -587,7 +588,6 @@ function individual_geotile_synthesis_gembfit_dv(binned_synthesized_file, gemb, 
 
     # add discharge date metadata
     colmetadata!(geotiles0, "discharge", "date", collect(val(ddate_gemb)), style=:note)
-    colmetadata!(geotiles0, "discharge", "units", "km3 [i.e.]", style=:note)
 
     # Process each variable
 
@@ -602,7 +602,6 @@ function individual_geotile_synthesis_gembfit_dv(binned_synthesized_file, gemb, 
 
     # Add date metadata for time series
     colmetadata!(geotiles0, :dv_altim, "date", collect(val(ddate_altim)), style=:note)
-    colmetadata!(geotiles0, :dv_altim, "units", "km3 [i.e.]", style=:note)
 
     # Apply GEMB scaling and convert units for each geotile
     dgeotile = dims(dv_altim, :geotile)
@@ -621,7 +620,6 @@ function individual_geotile_synthesis_gembfit_dv(binned_synthesized_file, gemb, 
 
         # Add date metadata for time series
         colmetadata!(geotiles0, Symbol(k), "date", collect(val(ddate_gemb)), style=:note)
-        colmetadata!(geotiles0, Symbol(k), "units", "km3 [i.e.]", style=:note)
     end
 
     for geotile in eachrow(geotiles0)
@@ -636,7 +634,6 @@ function individual_geotile_synthesis_gembfit_dv(binned_synthesized_file, gemb, 
     # modeled dm
     geotiles0[!, :dm] = (geotiles0[:, :dv] .- geotiles0[:, :fac]) .* volume2mass # to units of Gt
     colmetadata!(geotiles0, "dm", "date", collect(val(ddate_gemb)), style=:note)
-    colmetadata!(geotiles0, "dm", "units", "Gt", style=:note)
 
     # altimetry dm
     geotiles0[!, :dm_altim] = copy(geotiles0[!, :dv_altim])
@@ -650,7 +647,6 @@ function individual_geotile_synthesis_gembfit_dv(binned_synthesized_file, gemb, 
     end
 
     colmetadata!(geotiles0, "dm_altim", "date", colmetadata(geotiles0, "dv_altim", "date"), style=:note)
-    colmetadata!(geotiles0, "dm_altim", "units", "Gt", style=:note)
 
     # `dichage`, `dm` and `dv` must be average by geotile groups as they are not valid for single geotiles
     vars2average = ["discharge", "dv", "dm", "dv_altim", "dm_altim"]
@@ -671,6 +667,17 @@ function individual_geotile_synthesis_gembfit_dv(binned_synthesized_file, gemb, 
                     r[varn] = foo .* r[:mie2cubickm]
                 end
             end
+        end
+    end
+
+    # Every mass in Gt, every volume in km³, after the group averaging (which is linear and in the
+    # stored units).
+    for v in vcat("dv_altim", string.(collect(keys(gemb))), "discharge", "dm", "dm_altim")
+        if is_volume_varname(v)
+            colmetadata!(geotiles0, v, "units", "km3", style=:note)
+        else
+            v in ("dm", "dm_altim") || foreach(x -> x .*= volume2mass, geotiles0[!, v])
+            colmetadata!(geotiles0, v, "units", "Gt", style=:note)
         end
     end
 

@@ -444,9 +444,7 @@ One geotile's GEMB band series in the form the WGMS comparison samples:
   * `time`: the instants the levels refer to, ascending;
   * `smb`: (time × band) cumulative climatic surface mass balance, precipitation − runoff +
     evaporation/condensation, in m w.e. from any reference;
-  * `refreeze`: the same for GEMB's refreeze, or `nothing`;
-  * `height`: the same for the surface height in m (the negative cumulative `ice_flux`, settling of
-    the existing column included), or `nothing`.
+  * `refreeze`: the same for GEMB's refreeze, or `nothing`.
 
 A level at an arbitrary instant is interpolated linearly in time, so a window's balance over an output
 period assumes a uniform flux inside that period.
@@ -456,22 +454,20 @@ struct GEMBBandSMB{T<:Real}
     time::Vector{DateTime}
     smb::Matrix{T}
     refreeze::Union{Nothing,Matrix{T}}
-    height::Union{Nothing,Matrix{T}}
-    function GEMBBandSMB{T}(band_centers, time, smb, refreeze=nothing, height=nothing) where {T}
+    function GEMBBandSMB{T}(band_centers, time, smb, refreeze=nothing) where {T}
         issorted(band_centers; lt=<=) || error("band centers are not strictly ascending: $band_centers")
         issorted(time; lt=<=) || error("GEMB times are not strictly ascending")
         expected = (length(time), length(band_centers))
-        for (name, m) in (("smb", smb), ("refreeze", refreeze), ("height", height))
+        for (name, m) in (("smb", smb), ("refreeze", refreeze))
             isnothing(m) && continue
             size(m) == expected || throw(DimensionMismatch("$name is $(size(m)), expected (time, band) = $expected"))
             all(isfinite, m) || error("$name holds non-finite values")
         end
-        return new{T}(collect(Float64, band_centers), collect(DateTime, time), smb, refreeze, height)
+        return new{T}(collect(Float64, band_centers), collect(DateTime, time), smb, refreeze)
     end
 end
-GEMBBandSMB(band_centers, time, smb::AbstractMatrix{T}, refreeze=nothing, height=nothing) where {T} =
-    GEMBBandSMB{T}(band_centers, time, Matrix(smb), _maybe_matrix(refreeze), _maybe_matrix(height))
-_maybe_matrix(m) = isnothing(m) ? nothing : Matrix(m)
+GEMBBandSMB(band_centers, time, smb::AbstractMatrix{T}, refreeze=nothing) where {T} =
+    GEMBBandSMB{T}(band_centers, time, Matrix(smb), isnothing(refreeze) ? nothing : Matrix(refreeze))
 
 """
     wgms_band_weights(band_centers, z_lo, z_hi; max_extrapolation_m=50) -> Vector{Float64} or nothing
@@ -548,7 +544,6 @@ sampled with [`wgms_band_weights`](@ref).
   * `model` [m w.e.]: the modelled balance;
   * `model_refreeze` [m w.e.]: GEMB's refreeze in the window, an upper bound on the internal
     accumulation the model counts and a glaciological survey does not (missing without refreeze);
-  * `model_dh` [m]: the modelled surface height change over the window (missing without height);
   * `model_date_lo`, `model_date_hi` [m w.e.]: the modelled balance with each window end moved by its
     date uncertainty, narrowest and widest window.
 
@@ -562,7 +557,6 @@ function wgms_model_balances(records, model; max_extrapolation_m=50)
     n = nrow(records)
     out = (model=Vector{Union{Missing,Float64}}(missing, n),
            model_refreeze=Vector{Union{Missing,Float64}}(missing, n),
-           model_dh=Vector{Union{Missing,Float64}}(missing, n),
            model_date_lo=Vector{Union{Missing,Float64}}(missing, n),
            model_date_hi=Vector{Union{Missing,Float64}}(missing, n))
     reason = Vector{Union{Nothing,String}}(nothing, n)
@@ -583,7 +577,6 @@ function wgms_model_balances(records, model; max_extrapolation_m=50)
         wide = _gemb_window(m.time, m.smb, w, t0 - u0, t1 + u1)
         out.model_date_lo[i], out.model_date_hi[i] = minmax(narrow, wide)
         isnothing(m.refreeze) || (out.model_refreeze[i] = _gemb_window(m.time, m.refreeze, w, t0, t1))
-        isnothing(m.height) || (out.model_dh[i] = _gemb_window(m.time, m.height, w, t0, t1))
     end
 
     ok = isnothing.(reason)
@@ -632,19 +625,17 @@ function gemb_tile_band_smb(path; pscale, ΔT)
             a = (x - axis[j-1]) / (axis[j] - axis[j-1])
             return [(j - 1, 1 - a), (j, a)]
         end
-        layer = if pscale isa AbstractVector
-            function (name)
-                A = ds[name][:, :, :, :]
-                out = zeros(size(A, 1), length(band_centers))
-                for b in eachindex(band_centers), (jt, wt) in axis_weights(dts, ΔT),
-                    (jp, wp) in axis_weights(pss, pscale[b])
-                    out[:, b] .+= (wt * wp) .* Float64.(view(A, :, b, it[jt], ip[jp]))
-                end
-                out
+        # Each layer is read whole, once: slicing a deflated variable per forcing node costs a chunk
+        # decompression per slice.
+        band_pscale = pscale isa AbstractVector ? pscale : fill(pscale, length(band_centers))
+        function layer(name)
+            A = ds[name][:, :, :, :]
+            out = zeros(size(A, 1), length(band_centers))
+            for b in eachindex(band_centers), (jt, wt) in axis_weights(dts, ΔT),
+                (jp, wp) in axis_weights(pss, band_pscale[b])
+                out[:, b] .+= (wt * wp) .* Float64.(view(A, :, b, it[jt], ip[jp]))
             end
-        else
-            nodes = [(it[jt], ip[jp], wt * wp) for (jt, wt) in axis_weights(dts, ΔT) for (jp, wp) in axis_weights(pss, pscale)]
-            name -> sum(w .* Float64.(ds[name][:, :, t, p]) for (t, p, w) in nodes)
+            return out
         end
         smb = cumsum(layer("precipitation") .- layer("runoff") .+ layer("evaporation_condensation"); dims=1) ./ 1000
         refreeze = cumsum(layer("refreeze"); dims=1) ./ 1000
@@ -653,7 +644,7 @@ function gemb_tile_band_smb(path; pscale, ΔT)
 end
 
 """
-    wgms_tile_model(tile_dir, fits; pscale=:pscale, ΔT=:ΔT, physics_member=nothing, area_km2=nothing)
+    wgms_tile_model(tile_dir, fits; physics_member, pscale=:pscale, ΔT=:ΔT, area_km2=nothing)
         -> Function
 
 The `model` argument of [`wgms_model_balances`](@ref) for a GEMB_GlacierSims tile sweep in `tile_dir`
@@ -665,19 +656,18 @@ uncalibrated model.
 A geotile with no tile file of its own, or no fit, has no model: the comparison scores a geotile's own
 series, not a donor's.
 
-With `physics_member` (a GEMB physics member id) every tile file must have been run as its tile member
-([`gemb_tile_provenance`](@ref)), so a score cannot pair one member's tiles with another's fits. A member
-with a precipitation gradient ([`gemb_physics_member_parts`](@ref)) reads each band at
-`pscale · m_b`, the multipliers the calibration applied ([`gemb_band_pscale_multipliers`](@ref)); it
-needs `area_km2`, the `(geotile, height)` hypsometry the calibration weighted bands with
-(`_geotile_area_km2`), since `m_b` is centred on it. Bands holding no ice in it are read at `pscale`.
+Every tile file must have been run as `physics_member`'s tile member ([`gemb_tile_provenance`](@ref)),
+so a score cannot pair one member's tiles with another's fits. A member with a precipitation gradient
+([`gemb_physics_member_parts`](@ref)) reads each band at `pscale · m_b`, the multipliers the calibration
+applied ([`gemb_band_pscale_multipliers`](@ref)); it needs `area_km2`, the `(geotile, height)`
+hypsometry the calibration weighted bands with (`_geotile_area_km2`), since `m_b` is centred on it.
+Bands holding no ice in it are read at `pscale`.
 """
-function wgms_tile_model(tile_dir, fits; pscale=:pscale, ΔT=:ΔT, physics_member=nothing, area_km2=nothing)
-    paths = gemb_tile_paths(tile_dir)
-    parts = isnothing(physics_member) ? (; tile_member=nothing, precipitation_gradient=0.0) :
-            gemb_physics_member_parts(physics_member)
-    isnothing(physics_member) ||
-        gemb_tile_provenance(tile_dir, collect(values(paths)); physics_member=parts.tile_member)
+function wgms_tile_model(tile_dir, fits; physics_member, pscale=:pscale, ΔT=:ΔT, area_km2=nothing)
+    coverage = gemb_tile_coverage(tile_dir)
+    paths = gemb_tile_paths(coverage)
+    parts = gemb_physics_member_parts(physics_member)
+    gemb_tile_provenance(tile_dir, collect(values(coverage)); physics_member=parts.tile_member)
     g = parts.precipitation_gradient
     g > 0 && isnothing(area_km2) &&
         error("physics member $(repr(physics_member)) applies a precipitation gradient centred on each " *
@@ -700,48 +690,6 @@ function wgms_tile_model(tile_dir, fits; pscale=:pscale, ΔT=:ΔT, physics_membe
         return gemb_tile_band_smb(paths[geotile_id]; pscale=[w[b] > 0 ? p * m[b] : p for b in eachindex(m)],
                                   ΔT=t)
     end
-end
-
-"""
-    top_mass_bulk_density(dz, density, mass) -> Float64
-
-Bulk density [kg m⁻³] of the uppermost `mass` [kg m⁻²] of a column given surface-first layer
-thicknesses `dz` [m] and densities `density` [kg m⁻³]: `mass` over the depth that holds it, the
-deepest layer counted only in part. Throws if the column holds less than `mass`.
-"""
-function top_mass_bulk_density(dz, density, mass)
-    axes(dz) == axes(density) || throw(DimensionMismatch("dz $(axes(dz)) and density $(axes(density)) differ"))
-    mass > 0 || error("mass must be positive, got $mass")
-    m, depth = 0.0, 0.0
-    for i in eachindex(dz, density)
-        layer = dz[i] * density[i]
-        if m + layer >= mass
-            return mass / (depth + (mass - m) / density[i])
-        end
-        m += layer
-        depth += dz[i]
-    end
-    error("the column holds $m kg m-2, less than the $mass kg m-2 requested")
-end
-
-"""
-    young_snow_bulk_density(dz, density, age, max_age_days) -> (; density, mass, depth)
-
-Bulk density [kg m⁻³], mass [kg m⁻²] and depth [m] of the surface layers whose mass-weighted age is at
-most `max_age_days`, taken from the surface down to the first older layer: the snow accumulated since
-`max_age_days` ago. Layers merge old and new snow, so the boundary is as sharp as the model's layering.
-`density` is `NaN` when the surface layer is already older.
-"""
-function young_snow_bulk_density(dz, density, age, max_age_days)
-    axes(dz) == axes(density) == axes(age) ||
-        throw(DimensionMismatch("dz, density and age must share indices"))
-    m, depth = 0.0, 0.0
-    for i in eachindex(dz, density, age)
-        age[i] <= max_age_days || break
-        m += dz[i] * density[i]
-        depth += dz[i]
-    end
-    return (; density=depth > 0 ? m / depth : NaN, mass=m, depth)
 end
 
 # Pearson r, NaN for fewer than three pairs or zero variance.
@@ -1045,20 +993,12 @@ function wgms_validation(model; wgms, label="", qc=WGMS_SEASONAL_QC, elevation_b
     excluded_model = DataFrames.combine(groupby(m.excluded, [:source, :region, :season, :reason]), nrow => :n)
 
     labelled(df) = ncol(df) == 0 ? df : insertcols!(df, 1, :label => fill(label, nrow(df)))
-    if isempty(matched)
-        return (; matched=labelled(matched), excluded_qc=labelled(excluded_qc),
-                excluded_model=labelled(excluded_model), summary=DataFrame(), by_elevation=DataFrame(),
-                gradients=DataFrame(), gradient_summary=DataFrame(), anomaly=DataFrame(), ratio=DataFrame())
-    end
-    gradients = wgms_vertical_gradients(matched)
-    gradient_summary = _wgms_gradient_summary(gradients)
-    return (; matched=labelled(matched), excluded_qc=labelled(excluded_qc),
-            excluded_model=labelled(excluded_model),
-            summary=labelled(wgms_seasonal_statistics(matched)),
-            by_elevation=labelled(wgms_seasonal_statistics(matched; elevation_bin_m)),
-            gradients=labelled(gradients), gradient_summary=labelled(gradient_summary),
-            anomaly=labelled(wgms_anomaly_correlation(matched)),
-            ratio=labelled(wgms_seasonal_ratio(matched)))
+    matched = insertcols!(matched, 1, :label => fill(label, nrow(matched)))
+    scores = _wgms_rescore(matched)
+    empty = nrow(matched) == 0
+    return merge(scores, (; excluded_qc=labelled(excluded_qc), excluded_model=labelled(excluded_model),
+                          by_elevation=empty ? DataFrame() : labelled(wgms_seasonal_statistics(matched; elevation_bin_m)),
+                          gradients=empty ? DataFrame() : labelled(wgms_vertical_gradients(matched))))
 end
 
 """

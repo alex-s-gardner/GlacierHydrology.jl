@@ -4,24 +4,8 @@
 # have to agree: a GEMB volume converted to mass with a different density carries that ratio as a bias.
 const δice = 917;
 const seasonality_weight = 85/100
-# Strength of the forcing-prior penalty (`origin_penalty_mode = :prior`): the cost is multiplied by
-# 1 + wd × d, d the Mahalanobis distance from `gemb_forcing_prior`. 0.35 is the largest value within 1% of the
-# best held-out skill in temporal cross-validation; see notes/methods_2026-10_seasonal_cycle_and_calibration.md.
-# Derived, like `gemb_forcing_prior`, from the GEMB run `gemb_forcing_prior_run_id` fits.
-const distance_from_origin_penalty = 35 / 100
 # Only used by the `:legacy` penalty mode.
 const ΔT_to_pscale_weight = 50/100
-
-# Empirical prior on the GEMB forcing corrections for `origin_penalty_mode = :prior`: the area-weighted
-# centre, spread and correlation of the unpenalized fits of the well-constrained geotile groups (sd of
-# log pscale < 0.15 and of ΔT < 0.5 K within 5% of the minimum cost; 88% of ice area) for the reference
-# ensemble member, fill set 6, GEMB run 8. See notes/methods_2026-10_seasonal_cycle_and_calibration.md.
-const gemb_forcing_prior = (pscale=1.60, log_pscale_sd=0.45, ΔT=2.20, ΔT_sd=1.65, corr=0.50)
-# The GEMB run `gemb_forcing_prior` and `distance_from_origin_penalty` were derived from. Both describe
-# that run's forcing bias, so they hold for no other run: `gemb_calibration` throws when it would apply
-# them to a different one. Re-derive both from the new run's unpenalized fits
-# (`distance_from_origin_penalty = 0`), then update all three together.
-const gemb_forcing_prior_run_id = 8
 const ocean_area_km2 = 362.5 * 1E6
 
 """
@@ -79,6 +63,25 @@ const gemb_pilot_forcing_grid = (; pscale=[0.25, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0, 
 const gemb_pilot_gradient_forcing_grid = (; pscale=[0.75, 1.0, 1.5, 2.0, 3.0],
                                             ΔT=gemb_pilot_forcing_grid.ΔT)
 
+# The GEMB runs: where each sweep's tiles are, whether it covers every glacierized tile, and the
+# calibration prior derived from its own unpenalized fits.
+#
+# - `sweep`, `suffix`: the tile directory under `$CLIMATE_CACHE` and the tag of its combined files.
+# - `partial_coverage`: the sweep covers a subset of tiles. Such a run is binned on the geotiles with a
+#   tile of their own, calibrated on the geotile groups wholly inside it, and skips the fitted-pscale
+#   check of the reference geotiles.
+# - `allows_gradient`: precipitation-gradient members are defined on its tiles.
+# - `forcing_prior`, `distance_from_origin_penalty`: the forcing prior `(; pscale, log_pscale_sd, ΔT,
+#   ΔT_sd, corr)` and its weight `wd`, re-derived for each run by the temporal cross-validation of
+#   notes/methods_2026-10_seasonal_cycle_and_calibration.md §4 from that run's unpenalized fits.
+#   `nothing` and 0 until then: the calibration is unpenalized.
+const GEMB_RUNS = Dict(
+    9 => (; sweep="tile_runs_v2", suffix="v2", partial_coverage=false, allows_gradient=false,
+            forcing_prior=nothing, distance_from_origin_penalty=0.0),
+    10 => (; sweep="tile_runs_pilot", suffix="pilot", partial_coverage=true, allows_gradient=true,
+             forcing_prior=nothing, distance_from_origin_penalty=0.0),
+)
+
 """
     gemb_info(; gemb_run_id=9, physics_member)
 
@@ -86,7 +89,7 @@ Configuration of a GEMB_GlacierSims tile sweep.
 
 # Arguments
 - `gemb_run_id::Int`: 9, the production sweep in `\$CLIMATE_CACHE/tile_runs_v2`, or 10, the pilot sweep
-  in `\$CLIMATE_CACHE/tile_runs_pilot` on its own forcing grid and tile subset.
+  in `\$CLIMATE_CACHE/tile_runs_pilot` on its own forcing grid and tile subset ([`GEMB_RUNS`](@ref)).
 - `physics_member`: the GEMB_GlacierSims physics member (e.g. `"S-kfit-table"`, see
   [`gemb_reference_physics_member`](@ref)). Each run holds one tile sweep per member, under
   `<tile_dir>/<tile member>`, with a combined file of its own, so no tile of another member or sweep can
@@ -96,36 +99,37 @@ Configuration of a GEMB_GlacierSims tile sweep.
 
 # Returns
 Named tuple with
+- `gemb_run_id`, `physics_member`: the run and the checked member id;
 - `tile_dir`: directory of the member's tile NetCDF files;
 - `filename_gemb_combined`: path from which the per-mask geotile ensemble files are named;
-- `physics_member`: the checked member id;
-- `forcing_grid`: the `(; pscale, ΔT)` nodes the ensemble is read on, or `nothing` for the tiles' own grid.
+- `forcing_grid`: the `(; pscale, ΔT)` nodes the ensemble is read on, or `nothing` for the tiles' own grid;
+- `partial_coverage`, `forcing_prior`, `distance_from_origin_penalty`: the run's settings
+  ([`GEMB_RUNS`](@ref)).
 
 # Examples
 ```julia
 julia> gembinfo = gemb_info(; gemb_run_id=9, physics_member=gemb_reference_physics_member)
 ```
 """
-function gemb_info(; gemb_run_id = 9, physics_member = nothing)
-    gemb_run_id in (9, 10) || error("unrecognized gemb_run_id: $gemb_run_id (runs 9 and 10 are defined)")
-    isnothing(physics_member) &&
-        error("GEMB run $(gemb_run_id) holds one tile sweep per physics member; pass physics_member " *
-              "(the reference is gemb_reference_physics_member = $(repr(gemb_reference_physics_member)))")
+function gemb_info(; gemb_run_id=9, physics_member)
+    haskey(GEMB_RUNS, gemb_run_id) ||
+        error("unrecognized gemb_run_id: $gemb_run_id (runs $(join(sort(collect(keys(GEMB_RUNS))), " and ")) are defined)")
+    run = GEMB_RUNS[gemb_run_id]
     member = check_gemb_physics_member(physics_member)
     parts = gemb_physics_member_parts(member)
-    gemb_run_id == 9 && parts.precipitation_gradient > 0 &&
+    gradient = parts.precipitation_gradient > 0
+    gradient && !run.allows_gradient &&
         error("precipitation-gradient members ($(repr(member))) are defined for the pilot sweep (GEMB " *
-              "run 10) only; run 9 needs a geotile-mean pscale axis its tiles' bands stay on first")
-    sweep, suffix = gemb_run_id == 9 ? ("tile_runs_v2", "v2") : ("tile_runs_pilot", "pilot")
-    gemb_info = (;
-        tile_dir=joinpath(get(ENV, "CLIMATE_CACHE", "/mnt/bylot-r3/data/era5land"), sweep, parts.tile_member),
-        filename_gemb_combined="/mnt/bylot-r3/data/gemb/raw/gemb_glacier_sims_tiles_1950to2026_$(suffix)_$(member).jld2",
+              "run 10) only; run $(gemb_run_id) needs a geotile-mean pscale axis its tiles' bands stay on first")
+    return (;
+        gemb_run_id,
         physics_member=member,
-        forcing_grid=gemb_run_id == 9 ? nothing :
-                     parts.precipitation_gradient > 0 ? gemb_pilot_gradient_forcing_grid : gemb_pilot_forcing_grid
+        tile_dir=joinpath(get(ENV, "CLIMATE_CACHE", "/mnt/bylot-r3/data/era5land"), run.sweep, parts.tile_member),
+        filename_gemb_combined="/mnt/bylot-r3/data/gemb/gemb_glacier_sims_tiles_1950to2026_$(run.suffix)_$(member).jld2",
+        forcing_grid=!run.partial_coverage ? nothing :
+                     gradient ? gemb_pilot_gradient_forcing_grid : gemb_pilot_forcing_grid,
+        run.partial_coverage, run.forcing_prior, run.distance_from_origin_penalty,
     )
-
-    return gemb_info
 end
 
 
@@ -200,7 +204,7 @@ function gemb_altim_cost(x, dv_altim, dv_gemb, kwargs)
 end
 
 """
-    model_fit_cost_function(res, pscale, ΔT; seasonality_weight, distance_from_origin_penalty, ΔT_to_pscale_weight, calibrate_to=:all, is_scaling_factor, origin_penalty_mode=:prior, forcing_prior=gemb_forcing_prior)
+    model_fit_cost_function(res, pscale, ΔT; seasonality_weight, distance_from_origin_penalty, ΔT_to_pscale_weight, calibrate_to=:all, is_scaling_factor, origin_penalty_mode=:prior, forcing_prior=nothing)
 
 Compute a composite cost function for fitting a model to altimetry data, incorporating trend, seasonality, and parameter penalties.
 
@@ -219,7 +223,8 @@ Compute a composite cost function for fitting a model to altimetry data, incorpo
   allowing for the correlation between the two. `:legacy` multiplies it by `1 + wd * d`, `d` the weighted
   distance from the no-op point (1, 0).
 - `forcing_prior`: `(; pscale, log_pscale_sd, ΔT, ΔT_sd, corr)`, the centre, spreads and correlation used
-  by `origin_penalty_mode = :prior`; defaults to `gemb_forcing_prior`.
+  by `origin_penalty_mode = :prior`, or `nothing`, which only a zero `distance_from_origin_penalty`
+  accepts.
 
 # Returns
 A tuple `cost` where:
@@ -238,7 +243,7 @@ A tuple `cost` where:
 julia> cost = model_fit_cost_function(res, 1.0, 0.0; seasonality_weight=0.85, distance_from_origin_penalty=0.35, ΔT_to_pscale_weight=0.5)
 ```
 """
-function model_fit_cost_function(res, pscale, ΔT; seasonality_weight, distance_from_origin_penalty, ΔT_to_pscale_weight, calibrate_to=:all, is_scaling_factor=Dict("pscale" => true, "ΔT" => false), origin_penalty_mode=:prior, forcing_prior=gemb_forcing_prior)
+function model_fit_cost_function(res, pscale, ΔT; seasonality_weight, distance_from_origin_penalty, ΔT_to_pscale_weight, calibrate_to=:all, is_scaling_factor=Dict("pscale" => true, "ΔT" => false), origin_penalty_mode=:prior, forcing_prior=nothing)
 
     origin_penalty_mode in (:legacy, :prior) || error("origin_penalty_mode must be :legacy or :prior, got $origin_penalty_mode")
 
@@ -268,8 +273,10 @@ function model_fit_cost_function(res, pscale, ΔT; seasonality_weight, distance_
     end
 
     if origin_penalty_mode == :prior
+        iszero(distance_from_origin_penalty) && return cost
         (is_scaling_factor["pscale"] && !is_scaling_factor["ΔT"]) ||
             error("origin_penalty_mode = :prior assumes a multiplicative pscale and an additive ΔT")
+        isnothing(forcing_prior) && error("a forcing-prior penalty needs a forcing_prior")
         return cost * (1 + distance_from_origin_penalty * _forcing_prior_distance(pscale, ΔT, forcing_prior))
     else
         # Distance of a scaling factor from its no-op value of 1, measured symmetrically so that

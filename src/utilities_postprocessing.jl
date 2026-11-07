@@ -66,24 +66,14 @@ once renamed) and `fac`. Every other variable -- `dm`, `dm_altim`, `smb`, `acc`,
 """
 is_volume_varname(varname) = occursin("dv", varname) || occursin("fac", varname)
 
-# Units tag `individual_geotile_synthesis_gembfit_dv` gives every column it does not convert to Gt.
-const _KM3_ICE_EQUIVALENT = "km3 [i.e.]"
-
-# Factor taking one `_gembfit_dv` column to its regional unit: km³ for a volume, Gt for a mass. A mass
-# held as km³ of ice equivalent crosses `δice/1000` Gt per km³ here, once.
-function _regional_unit_factor(geotiles0, varname, path)
+# Throw unless a `_gembfit_dv` column is in its reporting unit, which `individual_geotile_synthesis_gembfit_dv`
+# records: km³ for a volume, Gt for a mass.
+function _check_reporting_unit(geotiles0, varname, path)
     units = colmetadata(geotiles0, varname, "units", nothing)
-    if is_volume_varname(varname)
-        units == _KM3_ICE_EQUIVALENT ||
-            error("$path: volume column $varname has units $(repr(units)), expected $(repr(_KM3_ICE_EQUIVALENT))")
-        return 1.0
-    elseif units == "Gt"
-        return 1.0
-    elseif units == _KM3_ICE_EQUIVALENT
-        return δice / 1000
-    else
-        error("$path: mass column $varname has units $(repr(units)), expected \"Gt\" or $(repr(_KM3_ICE_EQUIVALENT))")
-    end
+    expected = is_volume_varname(varname) ? "km3" : "Gt"
+    units == expected ||
+        error("$path: $(expected == "Gt" ? "mass" : "volume") column $varname has units $(repr(units)), expected $(repr(expected))")
+    return nothing
 end
 
 """
@@ -94,11 +84,10 @@ Aggregate glacier model run data by RGI (Randolph Glacier Inventory) regions.
 This function loads data from multiple model runs, aggregates variables by RGI regions,
 and creates special aggregations for HMA (regions 13-15) and global (regions 1-19).
 
-Volumes ([`is_volume_varname`](@ref): `dv`, `dv_altim`, `fac`) are summed in km³. Every other variable
-is a mass and is summed in Gt: the GEMB components and `discharge`, which the `_gembfit_dv` files hold
-in km³ of ice equivalent, are converted with `δice/1000` Gt per km³ on the way in, and `dm` and
-`dm_altim` are already Gt. Each column's `"units"` metadata is checked, and an unexpected tag throws.
-The unit of each output is in its `"units"` metadata (`"km3"` or `"Gt"`).
+Volumes ([`is_volume_varname`](@ref): `dv`, `dv_altim`, `fac`) are summed in km³ and every other
+variable, a mass, in Gt, the units the `_gembfit_dv` files hold them in. Each column's `"units"`
+metadata is checked, and an unexpected tag throws. The unit of each output is in its `"units"`
+metadata (`"km3"` or `"Gt"`).
 
 Geotiles with no altimetry at all (`dv_altim` NaN at every date) are left out of every sum: they have no
 calibrated fit and carry NaN `dv`, `dm` and `discharge`, which would otherwise make their whole region
@@ -108,8 +97,8 @@ left out of any run hold 1 km² of glacier or more, and they are listed once per
 # Arguments
 - `path2runs`: Vector of paths to model run files
 - `physics_member`: the GEMB physics member whose calibrated synthesis is read
-  ([`gemb_physics_path`](@ref)); `gemb_reference_physics_member` by default, `nothing` for a GEMB
-  run without members. [`runs2rgi_physics`](@ref) reads several.
+  ([`gemb_physics_path`](@ref)); `gemb_reference_physics_member` by default. [`runs2rgi_physics`](@ref)
+  reads several.
 - `vars2sum`: List of variable names to aggregate (default includes common glacier variables)
 
 # Returns
@@ -157,8 +146,7 @@ function runs2rgi(path2runs; physics_member=gemb_reference_physics_member, vars2
             geotiles0 = geotiles0[.!no_altim, :]
         end
 
-        # One factor per column, applied to the regional sums below
-        factor = Dict(v => _regional_unit_factor(geotiles0, v, binned_synthesized_dv_file) for v in vars2sum)
+        foreach(v -> _check_reporting_unit(geotiles0, v, binned_synthesized_dv_file), vars2sum)
 
         # group by rgi and sum
         geotiles_reg = groupby(geotiles0, :rgiid)
@@ -180,7 +168,7 @@ function runs2rgi(path2runs; physics_member=gemb_reference_physics_member, vars2
 
         for varname in vars2sum
             # reduce all region time series vectors to a matrix
-            regional_sum[varname][At(binned_synthesized_file), At(regions0.rgiid), :] = reduce(hcat, regions0[!, varname])' .* factor[varname]
+            regional_sum[varname][At(binned_synthesized_file), At(regions0.rgiid), :] = reduce(hcat, regions0[!, varname])'
         end
     end
 
@@ -1058,17 +1046,10 @@ function geotile2dimarray_kgm2(
 
     for varname in vars2extract
 
-        if varname == "dv"
-            # convert from km3 to m
-            geotile_out[At(varname), :, :] = reduce(hcat, getindex.(geotiles0[:, varname], (valid,)) ./ geotiles0[:, :area_km2] * 1000 * 1000 * varunits[varname])'
-
-        elseif varname == "dm"
-            # convert from Gt to kg/m²
-            geotile_out[At(varname), :, :] = reduce(hcat, getindex.(geotiles0[:, varname], (valid,)) ./ geotiles0[:, :area_km2] * 1000 * 1000 * varunits[varname])'
-        else
-            # convert from km3 of ice to kg/m²
-            geotile_out[At(varname), :, :] = reduce(hcat, getindex.(geotiles0[:, varname], (valid,)) ./ geotiles0[:, :area_km2] * δice * 1000 * varunits[varname])'
-        end
+        _check_reporting_unit(geotiles0, varname, binned_synthesized_dv_file)
+        # Gt / km² is 10⁶ kg m⁻²; `fac` (km³) is taken to kg m⁻² at `δice`.
+        factor = varname == "fac" ? δice * 1000 : 1000 * 1000
+        geotile_out[At(varname), :, :] = reduce(hcat, getindex.(geotiles0[:, varname], (valid,)) ./ geotiles0[:, :area_km2] * factor * varunits[varname])'
     end
 
     if !isnothing(reference_period)
@@ -1381,8 +1362,16 @@ julia> # Writes Arrow and GeoPackage files to the project output directory
 function gembfit_dv2gpkg(binned_synthesized_dv_file; outfile_prefix="Gardner2025_geotiles_rates", datelimits=(DateTime(2000, 3, 1), DateTime(2025, 1, 1)))
     # export trends and amplitudes for reference_run
 
-    # data is in units of km3 of ice equivalent at `δice`
+    # Masses are Gt and volumes km³. The archive reports the components in km³ (m) of ice equivalent at
+    # `δice` and `dm`, `dm_altim` in Gt (m w.e.), so the components are converted back.
     geotiles0 = FileIO.load(binned_synthesized_dv_file, "geotiles")
+    for v in names(geotiles0)
+        haskey(colmetadata(geotiles0, v), "units") || continue
+        _check_reporting_unit(geotiles0, v, binned_synthesized_dv_file)
+        if !is_volume_varname(v) && !(v in ("dm", "dm_altim"))
+            geotiles0[!, v] = [x .* (1000 / δice) for x in geotiles0[!, v]]
+        end
+    end
 
     altim_cols = names(geotiles0)[occursin.("_altim", names(geotiles0))]
     rename!(geotiles0, altim_cols .=> replace.(altim_cols, "_altim" => "_synthesis"))

@@ -229,50 +229,40 @@ using Logging
             surface_mask=:glacier, gemb=DimStack((; smb=dv_rgi7)), discharge_global_fn=tempname())
     end
 
-    @testset "the forcing prior is applied only to the GEMB run it was derived from" begin
+    @testset "the calibration takes the forcing prior from its GEMB run" begin
         run = joinpath(GlacierHydrology.pathlocal[:data_dir], "binned", "2deg",
                        "glacier_rgi7_dh_best_cc_nmad3_v01_filled_ac_p6_synthesized.jld2")
         dims4 = (Dim{:geotile}(["lat[+60+62]lon[-142-140]"]), Dim{:date}([Date(2000, 1, 15)]),
                  Dim{:pscale}([1.0]), Dim{:ΔT}([0.0]))
         dv(metadata) = DimArray(zeros(1, 1, 1, 1), dims4; metadata)
-        prior_run = GlacierHydrology.gemb_forcing_prior_run_id
-        other_run = prior_run + 1
+        prior = (pscale=1.60, log_pscale_sd=0.45, ΔT=2.20, ΔT_sd=1.65, corr=0.50)
 
-        @test_throws "derived from GEMB run $(prior_run) fits, not run $(other_run)" GlacierHydrology.gemb_calibration(
-            [run], dv(Dict("surface_mask" => "glacier_rgi7", "gemb_run_id" => other_run));
-            distance_from_origin_penalty=GlacierHydrology.distance_from_origin_penalty)
-        @test_throws "does not record its gemb_run_id" GlacierHydrology.gemb_calibration(
-            [run], dv(Dict("surface_mask" => "glacier_rgi7"));
-            distance_from_origin_penalty=GlacierHydrology.distance_from_origin_penalty)
+        # Run 9 has no prior yet: a penalty needs one passed, and a run that is not defined throws.
+        @test_throws "GEMB run 9 has no forcing prior" GlacierHydrology.gemb_calibration(
+            [run], dv(Dict("surface_mask" => "glacier_rgi7", "gemb_run_id" => 9)); distance_from_origin_penalty=0.35)
+        @test_throws "records GEMB run nothing, which is not defined" GlacierHydrology.gemb_calibration(
+            [run], dv(Dict("surface_mask" => "glacier_rgi7")))
+        @test_throws "records GEMB run 8, which is not defined" GlacierHydrology.gemb_calibration(
+            [run], dv(Dict("surface_mask" => "glacier_rgi7", "gemb_run_id" => 8)))
 
-        # The output's sidecar needs the tile sweep the ensemble was built from.
+        # The output's sidecar needs the tile sweep the ensemble was built from; a passed prior, or the
+        # run's default of no penalty, passes the prior check.
         @test_throws "dv_gemb records no tile_provenance" GlacierHydrology.gemb_calibration(
-            [run], dv(Dict("surface_mask" => "glacier_rgi7", "gemb_run_id" => prior_run));
-            distance_from_origin_penalty=GlacierHydrology.distance_from_origin_penalty)
+            [run], dv(Dict("surface_mask" => "glacier_rgi7", "gemb_run_id" => 9));
+            distance_from_origin_penalty=0.35, forcing_prior=prior)
+        @test_throws "dv_gemb records no tile_provenance" GlacierHydrology.gemb_calibration(
+            [run], dv(Dict("surface_mask" => "glacier_rgi7", "gemb_run_id" => 9)))
 
         # The ensemble's physics member must be the one its tile provenance names, so a fit is never
         # written into another member's folder.
         sweep(member) = Dict{String,Any}("tile_dir" => "/tiles",
                                          "tile_run_parameters" => Dict{String,Any}("physics_member" => member))
         @test_throws "tiles of GEMB physics member \"B-kfit-table\", not \"C-kfit-table\"; members must not be mixed" GlacierHydrology.gemb_calibration(
-            [run], dv(Dict("surface_mask" => "glacier_rgi7", "gemb_run_id" => other_run,
-                           "gemb_physics_member" => "C-kfit-table", "tile_provenance" => sweep("B-kfit-table")));
-            distance_from_origin_penalty=0)
-        @test_throws "name the member (physics_member = \"B-kfit-table\")" GlacierHydrology.gemb_calibration(
-            [run], dv(Dict("surface_mask" => "glacier_rgi7", "gemb_run_id" => other_run,
-                           "tile_provenance" => sweep("B-kfit-table")));
-            distance_from_origin_penalty=0)
-
-        # Unpenalized fits, the ones a new prior is derived from, pass the guard (and then fail on the
-        # absent altimetry file, which is not under test here).
-        err = try
-            GlacierHydrology.gemb_calibration([run], dv(Dict("surface_mask" => "glacier_rgi7", "gemb_run_id" => other_run));
-                                 distance_from_origin_penalty=0)
-            nothing
-        catch e
-            e
-        end
-        @test !occursin("gemb_forcing_prior", sprint(showerror, err))
+            [run], dv(Dict("surface_mask" => "glacier_rgi7", "gemb_run_id" => 9,
+                           "gemb_physics_member" => "C-kfit-table", "tile_provenance" => sweep("B-kfit-table"))))
+        @test_throws "records no gemb_physics_member" GlacierHydrology.gemb_calibration(
+            [run], dv(Dict("surface_mask" => "glacier_rgi7", "gemb_run_id" => 9,
+                           "tile_provenance" => sweep("B-kfit-table"))))
     end
 
     @testset "gemb_ensemble_built is the newest per-mask ensemble file and throws on a missing one" begin

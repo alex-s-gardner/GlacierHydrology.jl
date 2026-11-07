@@ -112,7 +112,6 @@ for calibrate_to in calibrate_to
         geotile_grouping_min_feature_area_km2=100,
         single_geotile_test,
         seasonality_weight=GlacierHydrology.seasonality_weight,
-        distance_from_origin_penalty=GlacierHydrology.distance_from_origin_penalty,
         ΔT_to_pscale_weight=GlacierHydrology.ΔT_to_pscale_weight,
         force_remake_before=GlacierHydrology.gemb_ensemble_built(GlacierHydrology.gemb_info(; gemb_run_id, physics_member=gemb_physics_member),
                                                     [surface_mask_ref]),
@@ -137,7 +136,9 @@ begin
     geotiles0 = GeoDataFrames.read(fname)
 
 
-    f = GlacierHydrology.plot_ref_pscale_ΔT_summary(path2runs_synthesized, first(path2runs_synthesized); rgi2plot=[99], show_title=false, bin_width=0.5)
+    f = GlacierHydrology.plot_ref_pscale_ΔT_summary(path2runs_synthesized, ensemble_reference_file, gemb_physics_member;
+        rgi2plot=[99], show_title=false, bin_width=0.5,
+        distance_from_origin_penalty=GlacierHydrology.gemb_info(; gemb_run_id, physics_member=gemb_physics_member).distance_from_origin_penalty)
     fname = joinpath(GlacierHydrology.pathlocal[:figures], "Extended_Data_Figure_9.png")
     display(f[1])
     CairoMakie.save(fname, f[1])

@@ -111,11 +111,9 @@ end
     gemb_physics_path(path, physics_member) -> String
 
 Where the output `path` of a calibration against `physics_member`'s tile sweep is written:
-`<dirname(path)>/gemb_physics/<physics_member>/<basename(path)>`. With `physics_member = nothing`
-(a tile sweep run without members), `path` itself.
+`<dirname(path)>/gemb_physics/<physics_member>/<basename(path)>`.
 """
-gemb_physics_path(path, ::Nothing) = path
-gemb_physics_path(path, physics_member::AbstractString) =
+gemb_physics_path(path, physics_member) =
     joinpath(dirname(path), "gemb_physics", check_gemb_physics_member(physics_member), basename(path))
 
 """
@@ -132,54 +130,15 @@ gembfit_dv_path(synthesized, physics_member) =
     gemb_physics_path(replace(synthesized, ".jld2" => "_gembfit_dv.jld2"), physics_member)
 
 """
-    gemb_physics_member_from_path(path) -> String or nothing
-
-The physics member whose folder (`gemb_physics/<member>/`, [`gemb_physics_path`](@ref)) holds `path`,
-or `nothing` when `path` is in no member folder.
-"""
-function gemb_physics_member_from_path(path)
-    parts = splitpath(dirname(path))
-    length(parts) >= 2 && parts[end-1] == "gemb_physics" || return nothing
-    return check_gemb_physics_member(parts[end])
-end
-
-"""
-    gemb_physics_source(path) -> (path, physics_member)
-
-The inverse of [`gemb_physics_path`](@ref): `path` with its `gemb_physics/<member>/` folder removed,
-and the member, or `(path, nothing)` when it is in no member folder.
-"""
-function gemb_physics_source(path)
-    member = gemb_physics_member_from_path(path)
-    isnothing(member) && return (path, nothing)
-    return (joinpath(dirname(dirname(dirname(path))), basename(path)), member)
-end
-
-"""
-    gemb_physics_member(A) -> String or nothing
+    gemb_physics_member(A) -> String
 
 The physics member the GEMB ensemble `A` (a layer or the DimStack from [`gemb_ensemble_dv`](@ref)) was
-built from, read from its metadata; `nothing` for a sweep run without members.
+built from, read from its metadata. Throws if `A` records none.
 """
-gemb_physics_member(A) = get(DD.metadata(A), "gemb_physics_member", nothing)
-
-"""
-    gembfit_dv_files(path2runs_synthesized, physics_members) -> DimArray{String}
-
-The calibrated synthesis files (step 14, `…_synthesized_gembfit_dv.jld2`) of every altimetry ensemble
-member in `path2runs_synthesized` (`…_synthesized.jld2`) against every GEMB physics member in
-`physics_members`, as a `(run, physics)` DimArray of paths. `run` is labelled with the altimetry
-member's synthesized file and `physics` with the member id, so the two ensemble dimensions can be
-reduced separately.
-"""
-function gembfit_dv_files(path2runs_synthesized, physics_members)
-    members = check_gemb_physics_member.(collect(physics_members))
-    allunique(members) || error("physics members repeat: $(join(members, ", "))")
-    runs = collect(String, path2runs_synthesized)
-    all(endswith("_synthesized.jld2"), runs) ||
-        error("expected `…_synthesized.jld2` altimetry members, got $(join(filter(!endswith("_synthesized.jld2"), runs), ", "))")
-    files = [gembfit_dv_path(r, m) for r in runs, m in members]
-    return DimArray(files, (Dim{:run}(runs), Dim{:physics}(members)))
+function gemb_physics_member(A)
+    member = get(DD.metadata(A), "gemb_physics_member", nothing)
+    isnothing(member) && error("the GEMB ensemble records no gemb_physics_member; load it with gemb_ensemble_dv")
+    return member
 end
 
 """
@@ -224,13 +183,10 @@ function _gemb_gradient_provenance(provenance, precipitation_gradient)
 end
 
 # Throw unless the `tile_run_parameters` of a tile provenance (`gemb_tile_provenance`) name
-# `physics_member`, or name no member when it is `nothing`. `what` names the provenance's source.
+# `physics_member`. `what` names the provenance's source.
 function _check_gemb_physics_provenance(parameters, physics_member, what)
     recorded = get(parameters, "physics_member", nothing)
     recorded == physics_member && return nothing
-    isnothing(physics_member) &&
-        error("$(what) was fitted on, or built from, tiles of GEMB physics member $(repr(recorded)); " *
-              "name the member (physics_member = $(repr(recorded))) so its outputs are kept apart")
     error("$(what) was fitted on, or built from, tiles of GEMB physics member $(repr(recorded)), " *
           "not $(repr(physics_member)); members must not be mixed")
 end

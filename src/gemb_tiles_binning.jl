@@ -11,8 +11,8 @@
 # area-weighted by that mask's hypsometry, saved as "gemb_dv" with its "surface_mask" and the
 # "tile_provenance" of the tile files read (`GlacierHydrology.gemb_tile_provenance`) to
 # `gemb_geotile_dv_file(gembinfo, surface_mask)` and read back by
-# `gemb_ensemble_dv(; gemb_run_id, surface_mask)`. Altimetry members are calibrated against the ensemble
-# of their own mask.
+# `gemb_ensemble_dv(; gemb_run_id, surface_mask, physics_member)`. Altimetry members are calibrated
+# against the ensemble of their own mask. Each tile file is read once for both masks.
 # GEMB output is in metres of ice equivalent at the density each tile records as `model_density_ice`.
 
 begin
@@ -39,15 +39,9 @@ begin
 
     gembinfo = GlacierHydrology.gemb_info(; gemb_run_id, physics_member=gemb_physics_member)
 
-    # Date bins: the 30-day bins of `GVC.project_date_bins`, extended back to 1970 on the same edges.
-    # Every altimetry bin then has a GEMB bin with the same label, which `gemb_calibration` requires.
-    date_range, _ = GVC.project_date_bins()
-    Δd = 30
-    date_range = reverse(last(date_range):-Day(Δd):Date(1970, 1, 1))
-    date_center = date_range[1:end-1] .+ Day(Δd / 2)
-
-    length(date_range) == length(date_center) + 1 ||
-        error("date_range and date_center lengths are inconsistent")
+    # Date bins: the altimetry's, from 1970. Every altimetry bin then has a GEMB bin with the same
+    # label, which `gemb_calibration` requires.
+    _, date_center = GVC.project_date_bins(; start=Date(1970, 1, 1))
 
     # Every geotile holding ice is processed. Those the sweep covers are read from their own tile; the
     # rest borrow the nearest one and are rebinned onto their own hypsometry by `process_gemb_tiles`,
@@ -55,32 +49,31 @@ begin
     # otherwise: a partial one would arrive partly NaN and fail the checks below with no indication of
     # why, and the directory also accumulates shorter development sweeps.
     coverage = GlacierHydrology.gemb_tile_coverage(gembinfo.tile_dir)
-    available = keys(GlacierHydrology.gemb_tile_paths(gembinfo.tile_dir;
-                                        covering=(first(date_center), last(date_center))))
+    available = GlacierHydrology.gemb_tile_paths(coverage; covering=(first(date_center), last(date_center)))
     println("tile files: $(length(coverage)), of which $(length(available)) span the date axis")
     println("dates: $(length(date_center)) bins, $(first(date_center)) .. $(last(date_center))")
 end;
 
+# The geotiles and hypsometry of each surface mask.
+masks = Dict{Symbol,Any}()
 for surface_mask in gemb_surface_masks
     geotiles = GlacierHydrology._geotile_load_align(; surface_mask, geotile_order=nothing,
                                       only_geotiles_w_area_gt_0=true)
     area_km2 = GlacierHydrology._geotile_area_km2(; surface_mask, geotile_width)
 
-    println("$(surface_mask): geotiles with a tile of their own: $(sum(in(id, available) for id in geotiles.id)) of $(nrow(geotiles))")
+    println("$(surface_mask): geotiles with a tile of their own: $(count(id -> haskey(available, id), geotiles.id)) of $(nrow(geotiles))")
 
-    if gemb_run_id == 10
-        own = GlacierHydrology.gemb_tile_own_geotiles(geotiles.id, gembinfo.tile_dir;
-                                         covering=(first(date_center), last(date_center)))
+    if gembinfo.partial_coverage
+        own = GlacierHydrology.gemb_tile_own_geotiles(geotiles.id, available)
         geotiles = geotiles[in.(geotiles.id, Ref(Set(own))), :]
-        println("$(surface_mask): pilot run, binned on the $(nrow(geotiles)) geotiles with a pilot tile of their own")
+        println("$(surface_mask): sweep over a subset of tiles, binned on the $(nrow(geotiles)) geotiles with a tile of their own")
 
         # A precipitation-gradient member covers only the geotiles whose bands stay on their tile's
         # pscale axis at every node of its forcing grid; the rest are listed, not binned.
         g = GlacierHydrology.gemb_physics_member_parts(gemb_physics_member).precipitation_gradient
         if g > 0
-            split = GlacierHydrology.gemb_gradient_supported_geotiles(geotiles.id, area_km2, gembinfo.tile_dir, g,
-                                                         gembinfo.forcing_grid.pscale;
-                                                         covering=(first(date_center), last(date_center)))
+            split = GlacierHydrology.gemb_gradient_supported_geotiles(geotiles.id, area_km2, available, g,
+                                                         gembinfo.forcing_grid.pscale)
             geotiles = geotiles[in.(geotiles.id, Ref(Set(split.supported))), :]
             println("$(surface_mask): $(gemb_physics_member) represents its gradient on $(nrow(geotiles)) geotiles; excluded:")
             show(stdout, MIME"text/plain"(), split.excluded); println()
@@ -99,12 +92,16 @@ for surface_mask in gemb_surface_masks
 
     nrow(geotiles) == 0 && error("$(surface_mask): no geotiles left to process")
     area_km2 = area_km2[geotile=At(geotiles.id)]
-
     println("$(surface_mask): geotiles to process: $(nrow(geotiles))  ($(round(Int, sum(area_km2))) km² of ice)")
+    masks[surface_mask] = (; geotiles, area_km2)
+end
 
-    gemb_dv0 = GlacierHydrology.process_gemb_tiles(geotiles, area_km2; gembinfo.tile_dir, date_center,
-                                      physics_member=gemb_physics_member,
-                                      gembinfo.forcing_grid)
+# Each tile is read once for every mask holding its geotile.
+gemb_dv_masks = GlacierHydrology.process_gemb_tiles(masks; gembinfo.tile_dir, date_center, coverage,
+                                                    physics_member=gemb_physics_member, gembinfo.forcing_grid)
+
+for surface_mask in gemb_surface_masks
+    gemb_dv0 = gemb_dv_masks[surface_mask]
     tile_provenance = DimensionalData.metadata(gemb_dv0)["tile_provenance"]
 
     gemb_dv0 = GlacierHydrology.gemb_add_derived_vars!(gemb_dv0)
@@ -131,6 +128,7 @@ for surface_mask in gemb_surface_masks
 
     if isnothing(single_geotile_test)
         gemb_geotile_filename_dv = GlacierHydrology.gemb_geotile_dv_file(gembinfo, surface_mask)
+        mkpath(dirname(gemb_geotile_filename_dv))
         save(gemb_geotile_filename_dv, Dict("gemb_dv" => gemb_dv0, "surface_mask" => String(surface_mask),
                                             "tile_provenance" => tile_provenance))
         println("wrote $(gemb_geotile_filename_dv)")

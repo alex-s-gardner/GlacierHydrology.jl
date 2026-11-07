@@ -83,7 +83,7 @@ referenced(per_interval) = (c = cumsum(per_interval); c .- first(c))
         area = test_hypsometry((1050.0 => 10.0, 1150.0 => 30.0, 1250.0 => 5.0))
 
         path = write_test_tile(joinpath(mktempdir(), "tile.nc"), times, band_centers; P, Rn, Ro, Rf, Mt, EC, firn)
-        tile = GlacierHydrology.read_gemb_tile(path, area, days_since_epoch(times); n_pscale=1, n_ΔT=1)
+        tile = GlacierHydrology.read_gemb_tile(path, area, days_since_epoch(times); grid=(; pscale=[1.0], ΔT=[0.0]))
         L = Dict(k => vec(v) for (k, v) in tile.layers)
 
         # Hand calculation in BigFloat: band weights 10 and 35 km² = 0.010 and 0.035 km³ per metre.
@@ -142,8 +142,14 @@ referenced(per_interval) = (c = cumsum(per_interval); c .- first(c))
         area = test_hypsometry(h => a for (h, a) in zip(band_centers, (3.0, 8.0, 12.0, 6.0, 1.0)))
 
         path = write_test_tile(joinpath(mktempdir(), "tile.nc"), times, band_centers; P, Rn, Ro, Rf, Mt, EC, firn)
-        tile = GlacierHydrology.read_gemb_tile(path, area, days_since_epoch(times); n_pscale=1, n_ΔT=1)
+        tile = GlacierHydrology.read_gemb_tile(path, area, days_since_epoch(times); grid=(; pscale=[1.0], ΔT=[0.0]))
         L = Dict(k => vec(v) for (k, v) in tile.layers)
+
+        # One read serves several hypsometries: each result is the one its own read would give.
+        other = test_hypsometry(h => a for (h, a) in zip(band_centers, (1.0, 0.0, 4.0, 9.0, 2.0)))
+        both = GlacierHydrology.read_gemb_tile(path, [area, other], days_since_epoch(times); grid=(; pscale=[1.0], ΔT=[0.0]))
+        @test both[1].layers == tile.layers
+        @test both[2].layers == GlacierHydrology.read_gemb_tile(path, other, days_since_epoch(times); grid=(; pscale=[1.0], ΔT=[0.0])).layers
 
         ρ = big"917"
         w = big.([3.0, 8.0, 12.0, 6.0, 1.0]) .* big"1e-3"
@@ -173,14 +179,16 @@ referenced(per_interval) = (c = cumsum(per_interval); c .- first(c))
             "software_gemb_glaciersims_tree" => "3333333333333333333333333333333333333333+dirty:0a1b2c3d",
             "software_gemb_version" => "0.9.0")
         ids = ["lat[+60+62]lon[-142-140]", "lat[+60+62]lon[-140-138]"]
+        software["physics_member"] = "B-kfit-table"
         # A model parameter resolved per tile differs between the two; it is not sweep-wide.
         tile_parameters = [merge(software, Dict{String,Any}("model_albedo_ice" => a)) for a in (0.40, 0.45)]
-
         sweep = mkpath(joinpath(mktempdir(), "tile_runs_v2"))
         paths = [write_test_tile(joinpath(sweep, "tile_$i.nc"), times, [1050.0]; flux...,
                                  geotile_id=ids[i], run_parameters=tile_parameters[i]) for i in 1:2]
 
-        provenance = GlacierHydrology.gemb_tile_provenance(sweep, paths)
+        coverage = GlacierHydrology.gemb_tile_coverage(sweep)
+        @test sort([t.path for t in values(coverage)]) == sort(paths)
+        provenance = GlacierHydrology.gemb_tile_provenance(sweep, collect(values(coverage)); physics_member="B-kfit-table")
         @test provenance["tile_dir"] == realpath(sweep)
         @test provenance["tile_run_parameters"] == software
 
@@ -189,9 +197,20 @@ referenced(per_interval) = (c = cumsum(per_interval); c .- first(c))
         dgeotile = Dim{:geotile}(ids)
         area = DimArray(zeros(2, length(height_centers)), (dgeotile, Dim{:height}(collect(height_centers))))
         area[:, findfirst(==(1050.0), height_centers)] .= 10.0
+        dates = [Date(2000, 2, 15), Date(2000, 3, 15)]
         gemb = GlacierHydrology.process_gemb_tiles(DataFrame(id=ids), area; tile_dir=sweep,
-                                      date_center=[Date(2000, 2, 15), Date(2000, 3, 15)], show_stats=false)
+                                      date_center=dates, show_stats=false, physics_member="B-kfit-table")
         @test DimensionalData.metadata(gemb)["tile_provenance"] == provenance
+
+        # Several masks from one read: each mask's ensemble is the one it would get alone.
+        masks = Dict(:a => (; geotiles=DataFrame(id=ids), area_km2=area),
+                     :b => (; geotiles=DataFrame(id=ids[2:2]), area_km2=area[geotile=At(ids[2:2])] .* 3))
+        by_mask = GlacierHydrology.process_gemb_tiles(masks; tile_dir=sweep, date_center=dates, show_stats=false,
+                                                      physics_member="B-kfit-table")
+        @test by_mask[:a][:acc] == gemb[:acc]
+        alone = GlacierHydrology.process_gemb_tiles(masks[:b].geotiles, masks[:b].area_km2; tile_dir=sweep,
+                                                    date_center=dates, show_stats=false, physics_member="B-kfit-table")
+        @test by_mask[:b][:acc] == alone[:acc]
 
         # The calibration output's sidecar, in GEMB_GlacierSims' format.
         gembfit = joinpath(mktempdir(), "glacier_rgi7_dh_cop30_v2_cc_nmad5_v01_filled_ac_p6_synthesized_gembfit.arrow")
@@ -219,15 +238,19 @@ referenced(per_interval) = (c = cumsum(per_interval); c .- first(c))
         other = merge(software, Dict{String,Any}("software_gemb_tree" => "4444444444444444444444444444444444444444"))
         mixed_paths = [write_test_tile(joinpath(mixed, "tile_$i.nc"), times, [1050.0]; flux...,
                                        geotile_id=ids[i], run_parameters=(software, other)[i]) for i in 1:2]
-        @test_throws "GEMB tile files disagree on software_gemb_tree" GlacierHydrology.gemb_tile_provenance(mixed, mixed_paths)
+        @test_throws "GEMB tile files disagree on software_gemb_tree" GlacierHydrology.gemb_tile_provenance(
+            mixed, collect(values(GlacierHydrology.gemb_tile_coverage(mixed))); physics_member="B-kfit-table")
         @test_throws "GEMB tile files disagree on software_gemb_tree" GlacierHydrology.process_gemb_tiles(
-            DataFrame(id=ids), area; tile_dir=mixed, date_center=[Date(2000, 2, 15)], show_stats=false)
+            DataFrame(id=ids), area; tile_dir=mixed, date_center=[Date(2000, 2, 15)], show_stats=false,
+            physics_member="B-kfit-table")
 
         untraced = mkpath(joinpath(mktempdir(), "tile_runs_untraced"))
         partial = Dict{String,Any}(k => v for (k, v) in software if k != "software_gemb_glaciersims_tree")
         untraced_path = write_test_tile(joinpath(untraced, "tile.nc"), times, [1050.0]; flux...,
                                         run_parameters=partial)
-        @test_throws "records no software_gemb_glaciersims_tree" GlacierHydrology.gemb_tile_provenance(untraced, [untraced_path])
-        @test_throws "tile files outside" GlacierHydrology.gemb_tile_provenance(sweep, [untraced_path])
+        untraced_tiles = collect(values(GlacierHydrology.gemb_tile_coverage(untraced)))
+        @test_throws "records no software_gemb_glaciersims_tree" GlacierHydrology.gemb_tile_provenance(
+            untraced, untraced_tiles; physics_member="B-kfit-table")
+        @test_throws "tile files outside" GlacierHydrology.gemb_tile_provenance(sweep, untraced_tiles; physics_member="B-kfit-table")
     end
 end

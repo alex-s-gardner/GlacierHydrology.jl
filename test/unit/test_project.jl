@@ -48,12 +48,17 @@ using Statistics
         @test allunique(getproperty.(infos, :tile_dir))
         @test allunique(getproperty.(infos, :filename_gemb_combined))
         @test all(occursin(m, i.filename_gemb_combined) for (m, i) in zip(members, infos))
-        @test_throws "GEMB run 9 holds one tile sweep per physics member; pass physics_member" GlacierHydrology.gemb_info(; gemb_run_id=9)
+        @test_throws UndefKeywordError GlacierHydrology.gemb_info(; gemb_run_id=9)
         @test_throws "is not a GEMB physics member id" GlacierHydrology.gemb_info(; gemb_run_id=9, physics_member="C_ks35_table")
         @test_throws "is not a GEMB physics member id" GlacierHydrology.gemb_info(; gemb_run_id=9, physics_member="../x-y-z")
 
         @test_throws "unrecognized gemb_run_id" GlacierHydrology.gemb_info(; gemb_run_id=8, physics_member=ref)
         @test_throws "unrecognized gemb_run_id" GlacierHydrology.gemb_info(; gemb_run_id=11, physics_member=ref)
+
+        # The run's settings: the pilot covers a subset of tiles, and neither run has a forcing prior yet.
+        @test run9.gemb_run_id == 9 && !run9.partial_coverage
+        @test run10.partial_coverage
+        @test all(isnothing(i.forcing_prior) && iszero(i.distance_from_origin_penalty) for i in (run9, run10))
     end
 
     @testset "file_is_current" begin
@@ -88,22 +93,26 @@ using Statistics
 
     @testset "GEMB calibration cost penalty" begin
         res = DimArray(sin.(2π .* (1:120) ./ 12) .+ 0.1 .* (1:120) ./ 120, Dim{:date}(DateTime(2010, 1, 15):Month(1):DateTime(2019, 12, 15)))
-        kw = (seasonality_weight=0.85, distance_from_origin_penalty=GlacierHydrology.distance_from_origin_penalty,
+        kw = (seasonality_weight=0.85, distance_from_origin_penalty=0.35,
             ΔT_to_pscale_weight=GlacierHydrology.ΔT_to_pscale_weight)
-        prior = GlacierHydrology.gemb_forcing_prior
+        prior = (pscale=1.60, log_pscale_sd=0.45, ΔT=2.20, ΔT_sd=1.65, corr=0.50)
 
         # both penalties are a factor ≥ 1 that is exactly 1 at their centre
         bare = GlacierHydrology.model_fit_cost_function(res, 1.0, 0.0; kw..., origin_penalty_mode=:legacy)
-        @test GlacierHydrology.model_fit_cost_function(res, prior.pscale, prior.ΔT; kw...) ≈ bare
-        @test GlacierHydrology.model_fit_cost_function(res, 1.0, 0.0; kw...) > bare
+        @test GlacierHydrology.model_fit_cost_function(res, prior.pscale, prior.ΔT; kw..., forcing_prior=prior) ≈ bare
+        @test GlacierHydrology.model_fit_cost_function(res, 1.0, 0.0; kw..., forcing_prior=prior) > bare
         @test GlacierHydrology.model_fit_cost_function(res, prior.pscale, prior.ΔT; kw..., origin_penalty_mode=:legacy) > bare
 
         # the prior distance is a Mahalanobis distance in (log pscale, ΔT)
         @test GlacierHydrology._forcing_prior_distance(prior.pscale * exp(prior.log_pscale_sd), prior.ΔT, (; prior..., corr=0.0)) ≈ 1
         @test GlacierHydrology._forcing_prior_distance(prior.pscale, prior.ΔT + prior.ΔT_sd, (; prior..., corr=0.0)) ≈ 1
 
+        # without a prior the penalty must be zero, and is then no penalty
+        @test GlacierHydrology.model_fit_cost_function(res, 3.0, 4.0; kw..., distance_from_origin_penalty=0) ≈ bare
+        @test_throws "a forcing-prior penalty needs a forcing_prior" GlacierHydrology.model_fit_cost_function(res, 1.0, 0.0; kw...)
+
         @test_throws "origin_penalty_mode must be :legacy or :prior" GlacierHydrology.model_fit_cost_function(res, 1.0, 0.0; kw..., origin_penalty_mode=:additive)
-        @test_throws "assumes a multiplicative pscale and an additive ΔT" GlacierHydrology.model_fit_cost_function(res, 1.0, 0.0; kw...,
+        @test_throws "assumes a multiplicative pscale and an additive ΔT" GlacierHydrology.model_fit_cost_function(res, 1.0, 0.0; kw..., forcing_prior=prior,
             is_scaling_factor=Dict("pscale" => true, "ΔT" => true))
     end
 

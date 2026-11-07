@@ -47,9 +47,10 @@ const _GEMB_BAND_MASS_LAYERS = ("melt", "runoff", "refreeze", "rain", "precipita
                                 "evaporation_condensation")
 
 """
-    gemb_tile_coverage(tile_dir) -> Dict{String,@NamedTuple{path::String, first::DateTime, last::DateTime, n::Int}}
+    gemb_tile_coverage(tile_dir) -> Dict{String,GEMBTile}
 
-Geotile id, path and time span of every `.nc` in `tile_dir`.
+Geotile id, path, time span and provenance parameters of every `.nc` in `tile_dir`, from one pass that
+opens each file once ([`GEMBTile`](@ref)).
 
 Ids come from each file's `geotile_id` attribute, which `GEMB_GlacierSims` already writes in this
 package's own form (`"lat[+62+64]lon[-152-150]"`), so no filename parsing is involved. Only the time
@@ -64,23 +65,22 @@ Throws if a file carries no `geotile_id`, or if two files claim the same geotile
 function gemb_tile_coverage(tile_dir)
     isdir(tile_dir) || error("no GEMB tile directory at $tile_dir")
 
-    coverage = Dict{String,@NamedTuple{path::String, first::DateTime, last::DateTime, n::Int}}()
+    coverage = Dict{String,GEMBTile}()
     for filename in readdir(tile_dir)
         endswith(filename, ".nc") || continue
         path = joinpath(tile_dir, filename)
 
-        entry = NCDataset(path, "r") do ds
+        geotile_id, tile = NCDataset(path, "r") do ds
             geotile_id = get(ds.attrib, "geotile_id", nothing)
             isnothing(geotile_id) && error("no geotile_id attribute in $path")
             time = DateTime.(ds["time"][:])
-            (geotile_id, (; path, first=first(time), last=last(time), n=length(time)))
+            (geotile_id, GEMBTile(path, first(time), last(time), length(time), _gemb_tile_software(ds)))
         end
 
-        geotile_id, span = entry
         if haskey(coverage, geotile_id)
             error("two tile files claim geotile $geotile_id: $(coverage[geotile_id].path) and $path")
         end
-        coverage[geotile_id] = span
+        coverage[geotile_id] = tile
     end
 
     isempty(coverage) && error("no .nc tile files found in $tile_dir")
@@ -88,55 +88,68 @@ function gemb_tile_coverage(tile_dir)
 end
 
 """
+    GEMBTile
+
+One tile file of a sweep ([`gemb_tile_coverage`](@ref)): its `path`, the `first` and `last` time and the
+number `n` of time steps, and `software`, its `software_*` and `physics_*` run parameters
+([`gemb_tile_provenance`](@ref)).
+"""
+struct GEMBTile
+    path::String
+    first::DateTime
+    last::DateTime
+    n::Int
+    software::Dict{String,Any}
+end
+
+"""
+    gemb_tile_paths(coverage; covering=nothing) -> Dict{String,String}
     gemb_tile_paths(tile_dir; covering=nothing) -> Dict{String,String}
 
 Map geotile id to tile file path, keeping only tiles whose time axis spans `covering`.
 
 `covering` is a pair or tuple of the first and last date the ensemble needs. Tiles that do not reach
 both ends are dropped: the ensemble is built on one date axis, so a tile covering part of it could only
-contribute NaN over the rest. Pass `nothing` to keep every tile.
+contribute NaN over the rest. Pass `nothing` to keep every tile. `coverage` is a
+[`gemb_tile_coverage`](@ref); a `tile_dir` is scanned for one.
 
 See [`gemb_tile_coverage`](@ref) for why this filter is not optional in practice.
 """
-function gemb_tile_paths(tile_dir; covering=nothing)
-    coverage = gemb_tile_coverage(tile_dir)
-    isnothing(covering) && return Dict(id => span.path for (id, span) in coverage)
+function gemb_tile_paths(coverage::AbstractDict; covering=nothing)
+    isnothing(covering) && return Dict(id => tile.path for (id, tile) in coverage)
 
     lo, hi = DateTime(first(covering)), DateTime(last(covering))
-    return Dict(id => span.path for (id, span) in coverage
-                if span.first <= lo && span.last >= hi)
+    return Dict(id => tile.path for (id, tile) in coverage
+                if tile.first <= lo && tile.last >= hi)
 end
+gemb_tile_paths(tile_dir::AbstractString; covering=nothing) =
+    gemb_tile_paths(gemb_tile_coverage(tile_dir); covering)
 
 """
-    gemb_tile_own_geotiles(geotile_ids, tile_dir; covering) -> Vector{String}
+    gemb_tile_own_geotiles(geotile_ids, paths) -> Vector{String}
 
-The ids in `geotile_ids` that have a tile file of their own in `tile_dir` spanning `covering` (see
-[`gemb_tile_paths`](@ref)), in their given order. A sweep over a subset of tiles (the pilot, GEMB run
-10) is binned on these alone, so no geotile borrows a tile of another.
+The ids in `geotile_ids` that have a tile file of their own in `paths` ([`gemb_tile_paths`](@ref)), in
+their given order. A sweep over a subset of tiles (the pilot, GEMB run 10) is binned on these alone, so
+no geotile borrows a tile of another.
 """
-function gemb_tile_own_geotiles(geotile_ids, tile_dir; covering)
-    own = keys(gemb_tile_paths(tile_dir; covering))
-    return [id for id in geotile_ids if id in own]
-end
+gemb_tile_own_geotiles(geotile_ids, paths) = [id for id in geotile_ids if haskey(paths, id)]
 
 """
-    gemb_gradient_supported_geotiles(geotile_ids, area_km2, tile_dir, precipitation_gradient, pscale_nodes;
-                                     covering) -> (; supported, excluded)
+    gemb_gradient_supported_geotiles(geotile_ids, area_km2, paths, precipitation_gradient, pscale_nodes)
+        -> (; supported, excluded)
 
-Split `geotile_ids`, each read from its own tile in `tile_dir` ([`gemb_tile_own_geotiles`](@ref)), by
+Split `geotile_ids`, each read from its own tile in `paths` ([`gemb_tile_own_geotiles`](@ref)), by
 whether a precipitation gradient of `precipitation_gradient` [% per 100 m] can be represented on its
 tile at every geotile-mean pscale node in `pscale_nodes`: every band holding ice under the geotile's
 hypsometry (`area_km2`, `(geotile, height)`) stays on the tile's pscale axis
 ([`gemb_gradient_pscale_range`](@ref)). `excluded` is a `DataFrame` of the others with the range each
 supports (`lo > hi` when none). A gradient member is calibrated and scored on `supported` alone.
 """
-function gemb_gradient_supported_geotiles(geotile_ids, area_km2, tile_dir, precipitation_gradient,
-                                          pscale_nodes; covering)
-    paths = gemb_tile_paths(tile_dir; covering)
+function gemb_gradient_supported_geotiles(geotile_ids, area_km2, paths, precipitation_gradient, pscale_nodes)
     supported = String[]
     excluded = DataFrame(id=String[], pscale_lo=Float64[], pscale_hi=Float64[])
     for id in geotile_ids
-        haskey(paths, id) || error("$(id) has no tile of its own in $(tile_dir)")
+        haskey(paths, id) || error("$(id) has no tile of its own")
         centers, axis = NCDataset(paths[id], "r") do ds
             Float64.(ds["band_center"][:]), Float64.(ds["precipitation_scaling"][:])
         end
@@ -160,20 +173,25 @@ function _gemb_tile_run_parameters(ds)
                             if haskey(ds.attrib, k))
 end
 
+# The `software_*` and `physics_*` run parameters of a tile file, the part of its provenance shared by
+# every tile of a sweep.
+_gemb_tile_software(ds) = Dict{String,Any}(k => v for (k, v) in _gemb_tile_run_parameters(ds)
+                                           if startswith(k, "software_") || startswith(k, "physics_"))
+
 # The source trees of the code a tile sweep was run with. Every tile of one sweep records the same
 # three, and GEMB_GlacierSims requires them in a calibration's provenance.
 const GEMB_TILE_PROVENANCE_REQUIRED = ("software_gemb_tree", "software_gemb_climateforcing_tree",
                                        "software_gemb_glaciersims_tree")
 
 """
-    gemb_tile_provenance(tile_dir, paths; physics_member=nothing) -> Dict{String,Any}
+    gemb_tile_provenance(tile_dir, tiles; physics_member) -> Dict{String,Any}
 
-The tile sweep the tile files `paths` (in `tile_dir`) come from, as GEMB_GlacierSims'
-`assert_corrections_fitted_on` reads it from a calibration's provenance file:
+The tile sweep the tiles `tiles` (in `tile_dir`; [`GEMBTile`](@ref)s from [`gemb_tile_coverage`](@ref))
+come from, as GEMB_GlacierSims' `assert_corrections_fitted_on` reads it from a calibration's
+provenance file:
 
   * `"tile_dir"`: `realpath(tile_dir)`;
-  * `"tile_run_parameters"`: every `software_*` and `physics_*` run parameter the files record, read
-    from the files.
+  * `"tile_run_parameters"`: every `software_*` and `physics_*` run parameter the files record.
 
 Only the `software_*` parameters (package versions and source trees) and the `physics_*` parameters
 (the GEMB_GlacierSims physics member and its levels) are recorded. They are the same for every tile of
@@ -182,22 +200,18 @@ GEMB_GlacierSims compares each recorded key with every reference tile it runs ag
 
 Throws if a file lies outside `tile_dir`, lacks one of [`GEMB_TILE_PROVENANCE_REQUIRED`](@ref),
 records a `software_*` or `physics_*` parameter differently from another file (including recording
-one another lacks), or was run as a physics member other than `physics_member` (`nothing`: as none).
+one another lacks), or was run as a physics member other than `physics_member`.
 """
-function gemb_tile_provenance(tile_dir, paths; physics_member=nothing)
-    isempty(paths) && error("no GEMB tile files to record the provenance of")
+function gemb_tile_provenance(tile_dir, tiles; physics_member)
+    isempty(tiles) && error("no GEMB tile files to record the provenance of")
     dir = realpath(tile_dir)
-    outside = [p for p in paths if dirname(realpath(p)) != dir]
+    outside = [t.path for t in tiles if dirname(realpath(t.path)) != dir]
     isempty(outside) || error("tile files outside $(dir): $(join(outside, ", "))")
 
     recorded = nothing
     reference = ""
-    for path in sort(unique(paths))
-        parameters = NCDataset(path, "r") do ds
-            _gemb_tile_run_parameters(ds)
-        end
-        software = Dict{String,Any}(k => v for (k, v) in parameters
-                                    if startswith(k, "software_") || startswith(k, "physics_"))
+    for tile in sort(unique(tiles); by=t -> t.path)
+        software, path = tile.software, tile.path
         absent = [k for k in GEMB_TILE_PROVENANCE_REQUIRED if !haskey(software, k)]
         isempty(absent) || error("$(path) records no $(join(absent, ", ")), so the code its run came from is unknown")
         _check_gemb_physics_provenance(software, physics_member, path)
@@ -347,18 +361,19 @@ function _gemb_resample(series, source_days, target_days)
 end
 
 """
-    read_gemb_tile(path, area_km2, target_days; n_pscale, n_ΔT, grid=nothing, subset=false,
-                   precipitation_gradient=0.0)
+    read_gemb_tile(path, area_km2s, target_days; grid, subset=false, precipitation_gradient=0.0)
+        -> Vector of (; layers, extrapolated_fraction, closure_km3, melt_offset_km3)
+    read_gemb_tile(path, area_km2::AbstractDimArray, target_days; kwargs...)
 
-One tile's volume-change ensemble as `(; layers, extrapolated_fraction, closure_km3, melt_offset_km3)`.
+One tile's volume-change ensemble for each hypsometry in `area_km2s`, from one read of the file.
 
 `layers` is a `Dict{Symbol,Array{Float64,3}}` over `(date, pscale, ΔT)` in km³ of ice equivalent,
-cumulative and referenced to the first target date. `area_km2` is the geotile's row of
-`_geotile_area_km2`; `target_days` are the output date centers as days since `_GEMB_TIME_EPOCH`.
-The file's forcing grid must be `n_ΔT` × `n_pscale`, and, when `grid` (a
-[`gemb_tile_forcing_grid`](@ref)) is given, must have exactly its axes. With `subset = true` the file
-may carry more nodes: only those of `grid` are read, matched by value, and a node of `grid` the file
-lacks is an error.
+cumulative and referenced to the first target date. Each of `area_km2s` is a geotile's row of
+`_geotile_area_km2`, one per surface mask, and gives one result; a single row gives a single result.
+`target_days` are the output date centers as days since `_GEMB_TIME_EPOCH`. The file's forcing grid
+must have exactly the axes of `grid` (a [`gemb_tile_forcing_grid`](@ref)). With `subset = true` the
+file may carry more nodes: only those of `grid` are read, matched by value, and a node of `grid` the
+file lacks is an error.
 
 # Precipitation gradient
 
@@ -421,12 +436,14 @@ floor; a nonzero value means one of the assumptions above no longer holds for th
     -- tens of km³ on a large tile. `δice` is set to GEMB's default of 917 so that the volumes here and
     the `volume2mass = δice/1000` applied downstream describe the same ice.
 """
-function read_gemb_tile(path, area_km2, target_days; n_pscale, n_ΔT, grid=nothing, subset=false,
+read_gemb_tile(path, area_km2::AbstractDimArray, target_days; kwargs...) =
+    only(read_gemb_tile(path, [area_km2], target_days; kwargs...))
+
+function read_gemb_tile(path, area_km2s::AbstractVector, target_days; grid, subset=false,
                         precipitation_gradient=0.0)
     return NCDataset(path, "r"; maskingvalue = NaN) do ds
         band_centers = Float64.(ds["band_center"][:])
-        w, extrapolated_fraction = _gemb_band_weights(band_centers, area_km2)
-        w_mass = w ./ _gemb_density_ice(ds)
+        density_ice = _gemb_density_ice(ds)
 
         source_days = Dates.value.(DateTime.(ds["time"][:]) .- _GEMB_TIME_EPOCH) ./ 86_400_000
         if first(source_days) > first(target_days) || last(source_days) < last(target_days)
@@ -438,7 +455,6 @@ function read_gemb_tile(path, area_km2, target_days; n_pscale, n_ΔT, grid=nothi
         ΔT_stored = Float64.(ds["delta_temperature"][:])
         pscale_stored = Float64.(ds["precipitation_scaling"][:])
         if subset
-            isnothing(grid) && throw(ArgumentError("subset = true needs the grid to read"))
             function node(axis, v, name)
                 i = findfirst(==(v), axis)
                 isnothing(i) && error("$(basename(path)) has no $name node $v; its axis is $(sort(axis))")
@@ -447,94 +463,100 @@ function read_gemb_tile(path, area_km2, target_days; n_pscale, n_ΔT, grid=nothi
             iΔT = [node(ΔT_stored, v, "ΔT") for v in grid.ΔT]
             ipscale = [node(pscale_stored, v, "pscale") for v in grid.pscale]
         else
-            iΔT = sortperm(ΔT_stored)
-            ipscale = sortperm(pscale_stored)
-        end
-        length(iΔT) == n_ΔT && length(ipscale) == n_pscale ||
-            error("$(basename(path)) forcing grid is $(length(iΔT))x$(length(ipscale)), expected " *
-                  "$(n_ΔT)x$(n_pscale)")
-        # Same size is not same grid: the ensemble's axes are the first tile's, and a tile on other
-        # nodes would be read onto them silently.
-        if !isnothing(grid) && !subset
+            # The ensemble's axes are the first tile's, and a tile on other nodes would be read onto
+            # them silently.
             ΔT_file = sort(ΔT_stored)
             pscale_file = sort(pscale_stored)
             ΔT_file == grid.ΔT && pscale_file == grid.pscale ||
                 error("$(basename(path)) forcing grid is ΔT $(ΔT_file) × pscale $(pscale_file), but the " *
                       "ensemble's is ΔT $(grid.ΔT) × pscale $(grid.pscale); every tile of a sweep must share it")
+            iΔT = sortperm(ΔT_stored)
+            ipscale = sortperm(pscale_stored)
         end
 
-        # Read each band layer once, whole. Slicing a deflated variable per forcing node instead costs
-        # one chunk decompression per slice and dominates the runtime -- 49 nodes over 7 layers is two
-        # orders of magnitude more decompression than the file needs. Kept at the stored `Float32`:
-        # about 45 MB per layer, and the arithmetic below promotes against the `Float64` weights.
+        # Read each band layer once, whole, for every hypsometry. Slicing a deflated variable per
+        # forcing node instead costs one chunk decompression per slice and dominates the runtime -- 49
+        # nodes over 7 layers is two orders of magnitude more decompression than the file needs. Kept
+        # at the stored `Float32`: about 45 MB per layer, and the arithmetic below promotes against the
+        # `Float64` weights.
         band = Dict(name => ds[name][:, :, :, :] for name in
                     (_GEMB_BAND_HEIGHT_LAYERS..., _GEMB_BAND_MASS_LAYERS...))
-        m = gemb_band_pscale_multipliers(band_centers, w, precipitation_gradient)
-        gradient_nodes = iszero(precipitation_gradient) ? nothing :
-            _gemb_gradient_band_nodes(path, band_centers, w, m, pscale_stored, unique(ipscale))
-        n_time = length(target_days)
-        layers = Dict(k => fill(NaN, n_time, n_pscale, n_ΔT)
-                      for k in (GEMB_TILE_LAYERS..., :dv, :dv_mass))
-        closure_km3 = 0.0
-        melt_offset_km3 = 0.0
+        return [_gemb_tile_layers(path, band, band_centers, density_ice, area_km2, source_days, target_days,
+                                  pscale_stored, ipscale, iΔT, precipitation_gradient)
+                for area_km2 in area_km2s]
+    end
+end
 
-        for (jp, p) in enumerate(ipscale), (jt, t) in enumerate(iΔT)
-            # `w` folds the height fill and the area weighting into one vector, so each layer's
-            # area-weighted total is a single matrix-vector product over bands.
-            # With a precipitation gradient each band is read at its own pscale; the band sum follows.
-            slab = isnothing(gradient_nodes) ? (name -> view(band[name], :, :, t, p)) :
-                   (name -> _gemb_band_pscale_slab(band[name], t, gradient_nodes[p]))
-            total(name, weights) = slab(name) * weights
+# The layers of one tile under one hypsometry, from its band layers already read (`read_gemb_tile`).
+function _gemb_tile_layers(path, band, band_centers, density_ice, area_km2, source_days, target_days,
+                           pscale_stored, ipscale, iΔT, precipitation_gradient)
+    w, extrapolated_fraction = _gemb_band_weights(band_centers, area_km2)
+    w_mass = w ./ density_ice
+    m = gemb_band_pscale_multipliers(band_centers, w, precipitation_gradient)
+    gradient_nodes = iszero(precipitation_gradient) ? nothing :
+        _gemb_gradient_band_nodes(path, band_centers, w, m, pscale_stored, unique(ipscale))
+    n_time = length(target_days)
+    layers = Dict(k => fill(NaN, n_time, length(ipscale), length(iΔT))
+                  for k in (GEMB_TILE_LAYERS..., :dv, :dv_mass))
+    closure_km3 = 0.0
+    melt_offset_km3 = 0.0
 
-            precipitation = total("precipitation", w_mass)
-            rain = total("rain", w_mass)
-            refreeze = total("refreeze", w_mass)
+    for (jp, p) in enumerate(ipscale), (jt, t) in enumerate(iΔT)
+        # `w` folds the height fill and the area weighting into one vector, so each layer's
+        # area-weighted total is a single matrix-vector product over bands.
+        # With a precipitation gradient each band is read at its own pscale; the band sum follows.
+        slab = isnothing(gradient_nodes) ? (name -> view(band[name], :, :, t, p)) :
+               (name -> _gemb_band_pscale_slab(band[name], t, gradient_nodes[p]))
+        total(name, weights) = slab(name) * weights
 
-            # Split the rain by where it ended up. GEMB's `runoff` carries rain as well as meltwater
-            # despite its name, so rain in excess of what left the column over an interval must have
-            # stayed in the ice: that part is accumulation, and the remainder ran off. Both halves are
-            # per-interval quantities, hence the split before any cumulative sum. The split is per
-            # band, before the area weighting: each band is its own column, and splitting the tile
-            # totals instead would let rain retained in one band cancel meltwater runoff in another.
-            rain_band = slab("rain")
-            runoff_band = slab("runoff")
-            rain_retained = max.(Float64.(rain_band) .- runoff_band, 0.0) * w_mass
-            rain_shed = rain .- rain_retained
-            melt_runoff = max.(Float64.(runoff_band) .- rain_band, 0.0) * w_mass
+        precipitation = total("precipitation", w_mass)
+        refreeze = total("refreeze", w_mass)
 
-            native = Dict{Symbol,Vector{Float64}}(
-                :dv => total("dh", w),
-                :dv_mass => total("dh_mass", w),
-                # Snowfall plus the rain that refroze in the ice.
-                :acc => cumsum(precipitation .- rain .+ rain_retained),
-                # Only the rain that left; the retained part is in `acc`, not counted twice.
-                :rain => cumsum(rain_shed),
-                :refreeze => cumsum(refreeze),
-                # So `gemb_add_derived_vars!`'s `melt - refreeze` is runoff net of rain.
-                :melt => cumsum(melt_runoff .+ refreeze),
-                # Positive `ec` is mass loss here, the reverse of GEMB's flux convention.
-                :ec => -cumsum(total("evaporation_condensation", w_mass)),
-                # GEMB's own melt layer, kept only to report how far the above sits from it.
-                :melt_gemb => cumsum(total("melt", w_mass)),
-            )
+        # Split the rain by where it ended up. GEMB's `runoff` carries rain as well as meltwater
+        # despite its name, so rain in excess of what left the column over an interval must have
+        # stayed in the ice: that part is accumulation, and the remainder ran off. Both halves are
+        # per-interval quantities, hence the split before any cumulative sum. The split is per
+        # band, before the area weighting: each band is its own column, and splitting the tile
+        # totals instead would let rain retained in one band cancel meltwater runoff in another.
+        rain_band = slab("rain")
+        rain = rain_band * w_mass
+        excess = Float64.(rain_band) .- slab("runoff")
+        rain_retained = max.(excess, 0.0) * w_mass
+        rain_shed = rain .- rain_retained
+        melt_runoff = max.(.-excess, 0.0) * w_mass
 
-            series = Dict(k => _gemb_resample(v, source_days, target_days) for (k, v) in native)
-            for v in values(series)
-                v .-= first(v)
-            end
+        native = Dict{Symbol,Vector{Float64}}(
+            :dv => total("dh", w),
+            :dv_mass => total("dh_mass", w),
+            # Snowfall plus the rain that refroze in the ice.
+            :acc => cumsum(precipitation .- rain .+ rain_retained),
+            # Only the rain that left; the retained part is in `acc`, not counted twice.
+            :rain => cumsum(rain_shed),
+            :refreeze => cumsum(refreeze),
+            # So `gemb_add_derived_vars!`'s `melt - refreeze` is runoff net of rain.
+            :melt => cumsum(melt_runoff .+ refreeze),
+            # Positive `ec` is mass loss here, the reverse of GEMB's flux convention.
+            :ec => -cumsum(total("evaporation_condensation", w_mass)),
+            # GEMB's own melt layer, kept only to report how far the above sits from it.
+            :melt_gemb => cumsum(total("melt", w_mass)),
+        )
 
-            series[:fac] = series[:dv] .- series[:dv_mass]
-            smb = series[:acc] .- series[:melt] .+ series[:refreeze] .- series[:ec]
-            closure_km3 = max(closure_km3, maximum(abs, smb .- series[:dv_mass]))
-            melt_offset_km3 = max(melt_offset_km3, abs(last(series[:melt]) - last(series[:melt_gemb])))
-
-            for k in (GEMB_TILE_LAYERS..., :dv, :dv_mass)
-                layers[k][:, jp, jt] = series[k]
-            end
+        series = Dict(k => _gemb_resample(v, source_days, target_days) for (k, v) in native)
+        for v in values(series)
+            v .-= first(v)
         end
 
-        return (; layers, extrapolated_fraction, closure_km3, melt_offset_km3)
+        series[:fac] = series[:dv] .- series[:dv_mass]
+        smb = series[:acc] .- series[:melt] .+ series[:refreeze] .- series[:ec]
+        closure_km3 = max(closure_km3, maximum(abs, smb .- series[:dv_mass]))
+        melt_offset_km3 = max(melt_offset_km3, abs(last(series[:melt]) - last(series[:melt_gemb])))
+
+        for k in (GEMB_TILE_LAYERS..., :dv, :dv_mass)
+            layers[k][:, jp, jt] = series[k]
+        end
     end
+
+    return (; layers, extrapolated_fraction, closure_km3, melt_offset_km3)
 end
 
 # For each ensemble pscale node (a file index into `pscale_stored`), each band's pair of bracketing file
@@ -576,15 +598,21 @@ function _gemb_band_pscale_slab(A, t, band_nodes)
 end
 
 """
-    process_gemb_tiles(geotiles, area_km2; tile_dir, date_center, show_stats=true, max_donor_distance_km=2000,
-                       physics_member=nothing, forcing_grid=nothing)
+    process_gemb_tiles(masks; tile_dir, date_center, physics_member, coverage=gemb_tile_coverage(tile_dir),
+                       show_stats=true, max_donor_distance_km=2000, forcing_grid=nothing) -> Dict
+    process_gemb_tiles(geotiles, area_km2; kwargs...) -> DimStack
 
-Build the GEMB volume-change ensemble from `GEMB_GlacierSims` tile NetCDF.
+Build the GEMB volume-change ensemble from `GEMB_GlacierSims` tile NetCDF, for every surface mask at
+once. `masks` maps surface mask to `(; geotiles, area_km2)`, its geotiles (a table with an `id` column)
+and its `(geotile, height)` hypsometry; each tile is read once for all the masks that hold its geotile.
+The second form builds one mask's ensemble.
 
-Returns a `DimStack` of [`GEMB_TILE_LAYERS`](@ref) over `(geotile, date, pscale, ΔT)` in km³ of ice
-equivalent. `smb`, `runoff` and `dv` are added later by `gemb_add_derived_vars!`. The stack's metadata `"tile_provenance"` is the [`gemb_tile_provenance`](@ref) of the tile files
-read, donors included, which must all have been run as `physics_member` (see
-[`gemb_tile_provenance`](@ref)), and every tile must share the first tile's forcing grid.
+Each ensemble is a `DimStack` of [`GEMB_TILE_LAYERS`](@ref) over `(geotile, date, pscale, ΔT)` in km³ of
+ice equivalent. `smb`, `runoff` and `dv` are added later by `gemb_add_derived_vars!`. The stack's
+metadata `"tile_provenance"` is the [`gemb_tile_provenance`](@ref) of the tile files read, donors
+included, which must all have been run as `physics_member` (see [`gemb_tile_provenance`](@ref)), and
+every tile must share the first tile's forcing grid. `coverage` is the tile directory's
+[`gemb_tile_coverage`](@ref).
 
 `forcing_grid = (; pscale, ΔT)` builds the ensemble on those nodes instead, read by value from tiles
 that may carry more (a dense-grid tile beside reduced-grid ones); every tile must hold every node.
@@ -594,100 +622,114 @@ A `physics_member` with a precipitation gradient (`"<tile member>-g<g>"`,
 ([`read_gemb_tile`](@ref)), and its provenance names the gradient member and its
 `physics_precipitation_gradient`, so the ensemble and its fits stay apart from the tile member's.
 
-Every band is weighted by `area_km2`, so the ensemble and the altimetry it is calibrated against share
-one hypsometry. A geotile with no tile file of its own borrows the nearest one within
+Every band is weighted by the mask's `area_km2`, so each ensemble and the altimetry it is calibrated
+against share one hypsometry. A geotile with no tile file of its own borrows the nearest one within
 `max_donor_distance_km` -- see [`gemb_tile_donors`](@ref) -- and is rebinned onto its own hypsometry, so
 every geotile passed in gets a series rather than an all-NaN row that would reach the ensemble's NaN
 check with no indication of why.
 
-`show_stats` prints the substitutions worst-area first, the geotiles whose ice extends beyond the band
-range they were read against, and the largest `ec` closure residual. All three are silent data-quality
-problems otherwise, and the first two compound: a borrowed tile whose bands miss the target's ice
-entirely is held constant from its nearest band, which is the weakest estimate this produces.
+`show_stats` prints, per mask, the substitutions worst-area first, the geotiles whose ice extends beyond
+the band range they were read against, and the largest `ec` closure residual. All three are silent
+data-quality problems otherwise, and the first two compound: a borrowed tile whose bands miss the
+target's ice entirely is held constant from its nearest band, which is the weakest estimate this
+produces.
 """
-function process_gemb_tiles(geotiles, area_km2; tile_dir, date_center, show_stats=true,
-                            max_donor_distance_km=2000, physics_member=nothing, forcing_grid=nothing)
-    paths = gemb_tile_paths(tile_dir; covering=extrema(date_center))
-    donors = gemb_tile_donors(geotiles.id, paths; max_distance_km=max_donor_distance_km)
-    parts = isnothing(physics_member) ? (; tile_member=nothing, precipitation_gradient=0.0) :
-            gemb_physics_member_parts(physics_member)
+function process_gemb_tiles(geotiles, area_km2; kwargs...)
+    return only(values(process_gemb_tiles(Dict(:mask => (; geotiles, area_km2)); kwargs...)))
+end
+
+function process_gemb_tiles(masks::AbstractDict; tile_dir, date_center, physics_member,
+                            coverage=gemb_tile_coverage(tile_dir), show_stats=true,
+                            max_donor_distance_km=2000, forcing_grid=nothing)
+    paths = gemb_tile_paths(coverage; covering=extrema(date_center))
+    ids = unique(reduce(vcat, [collect(String, m.geotiles.id) for m in values(masks)]))
+    donors = gemb_tile_donors(ids, paths; max_distance_km=max_donor_distance_km)
+    parts = gemb_physics_member_parts(physics_member)
+    by_path = Dict(t.path => t for t in values(coverage))
     # From the files actually read, before the read: a mixed sweep fails here rather than after it.
     tile_provenance = _gemb_gradient_provenance(
-        gemb_tile_provenance(tile_dir, unique(paths[d.donor] for d in values(donors));
+        gemb_tile_provenance(tile_dir, [by_path[p] for p in unique(paths[d.donor] for d in values(donors))];
                              physics_member=parts.tile_member), parts.precipitation_gradient)
 
     subset = !isnothing(forcing_grid)
     grid = subset ?
         (; pscale=sort(Float64.(collect(forcing_grid.pscale))), ΔT=sort(Float64.(collect(forcing_grid.ΔT)))) :
-        gemb_tile_forcing_grid(paths[donors[first(geotiles.id)].donor])
+        gemb_tile_forcing_grid(paths[donors[first(ids)].donor])
     subset && (allunique(grid.pscale) && allunique(grid.ΔT) ||
                throw(ArgumentError("forcing_grid repeats a node: $forcing_grid")))
     ddate = Dim{:date}(collect(date_center))
-    dgeotile = Dim{:geotile}(collect(geotiles.id))
     dpscale = Dim{:pscale}(grid.pscale)
     dΔT = Dim{:ΔT}(grid.ΔT)
 
-    gemb_dv = DimStack([DimArray(fill(NaN, (dgeotile, ddate, dpscale, dΔT)); name=k)
-                        for k in GEMB_TILE_LAYERS]...; metadata=Dict("tile_provenance" => tile_provenance))
+    mask_keys = collect(keys(masks))
+    function mask_output(dgeotile)
+        gemb_dv = DimStack([DimArray(fill(NaN, (dgeotile, ddate, dpscale, dΔT)); name=v) for v in GEMB_TILE_LAYERS]...;
+                           metadata=Dict("tile_provenance" => tile_provenance))
+        return (; dgeotile, gemb_dv, extrapolated=fill(NaN, dgeotile), melt_offset=fill(NaN, dgeotile),
+                closure=fill(NaN, dgeotile))
+    end
+    out = Dict(k => mask_output(Dim{:geotile}(collect(String, masks[k].geotiles.id))) for k in mask_keys)
+    holds = Dict(k => Set(masks[k].geotiles.id) for k in mask_keys)
 
     target_days = Dates.value.(DateTime.(date_center) .- _GEMB_TIME_EPOCH) ./ 86_400_000
-    extrapolated = fill(NaN, dgeotile)
-    melt_offset = fill(NaN, dgeotile)
-    closure = fill(NaN, dgeotile)
 
-    @showprogress desc = "Reading GEMB tiles" Threads.@threads for row in collect(eachrow(geotiles))
-        tile = read_gemb_tile(paths[donors[row.id].donor], area_km2[geotile=At(row.id)], target_days;
-                              n_pscale=length(grid.pscale), n_ΔT=length(grid.ΔT), grid, subset,
-                              parts.precipitation_gradient)
-
-        for k in GEMB_TILE_LAYERS
-            gemb_dv[k][geotile=At(row.id)] = tile.layers[k]
-        end
-
-        extrapolated[At(row.id)] = tile.extrapolated_fraction
-        melt_offset[At(row.id)] = tile.melt_offset_km3
-        # `dv` reconstructed through this package's identities against the one the tile file implies.
-        smb = tile.layers[:acc] .- tile.layers[:melt] .+ tile.layers[:refreeze] .- tile.layers[:ec]
-        closure[At(row.id)] = maximum(abs, (smb .+ tile.layers[:fac]) .- tile.layers[:dv])
-    end
-
-    if show_stats
-        printstyled("GEMB tiles read: $(length(dgeotile))\n"; color=:light_green)
-        @printf("  max |dv| closure error : %.3g km3\n", maximum(closure))
-        @printf("  melt vs GEMB's melt    : up to %.1f km3 (%s) -- the rain GEMB nets off its melt\n",
-                maximum(melt_offset), val(dgeotile)[argmax(melt_offset)])
-
-        borrowed = [id for id in val(dgeotile) if donors[id].donor != id]
-        if isempty(borrowed)
-            println("  every geotile has a GEMB tile of its own")
-        else
-            ice_km2 = Dict(id => sum(area_km2[geotile=At(id)]) for id in val(dgeotile))
-            sort!(borrowed; by=id -> ice_km2[id], rev=true)
-            total_km2 = sum(values(ice_km2))
-            @printf("  %d geotiles have no tile of their own and borrow the nearest (%.0f km2, %.3f%% of the ice):\n",
-                    length(borrowed), sum(ice_km2[id] for id in borrowed),
-                    100 * sum(ice_km2[id] for id in borrowed) / total_km2)
-            for id in first(borrowed, 10)
-                @printf("      %-28s %8.2f km2 <- %-28s %5.0f km, %5.1f%% of ice beyond its bands\n",
-                        id, ice_km2[id], donors[id].donor, donors[id].distance_km,
-                        100 * extrapolated[At(id)])
+    @showprogress desc = "Reading GEMB tiles" Threads.@threads for id in ids
+        ks = [k for k in mask_keys if id in holds[k]]
+        tiles = read_gemb_tile(paths[donors[id].donor], [masks[k].area_km2[geotile=At(id)] for k in ks], target_days;
+                               grid, subset, parts.precipitation_gradient)
+        for (k, tile) in zip(ks, tiles)
+            o = out[k]
+            for v in GEMB_TILE_LAYERS
+                o.gemb_dv[v][geotile=At(id)] = tile.layers[v]
             end
-            length(borrowed) > 10 && println("      ... $(length(borrowed) - 10) more, all smaller")
-        end
-
-        beyond = findall(>(0), collect(extrapolated))
-        if isempty(beyond)
-            println("  every ice-bearing height bin is covered by a GEMB band")
-        else
-            order = beyond[sortperm(collect(extrapolated)[beyond]; rev=true)]
-            @printf("  %d geotiles have ice beyond the band range (median %.2f%%):\n",
-                    length(beyond), 100 * median(collect(extrapolated)[beyond]))
-            for i in first(order, 10)
-                @printf("      %-28s %6.2f%% of ice area\n",
-                        val(dgeotile)[i], 100 * extrapolated[i])
-            end
+            o.extrapolated[At(id)] = tile.extrapolated_fraction
+            o.melt_offset[At(id)] = tile.melt_offset_km3
+            # `dv` reconstructed through this package's identities against the one the tile file implies.
+            smb = tile.layers[:acc] .- tile.layers[:melt] .+ tile.layers[:refreeze] .- tile.layers[:ec]
+            o.closure[At(id)] = maximum(abs, (smb .+ tile.layers[:fac]) .- tile.layers[:dv])
         end
     end
 
-    return gemb_dv
+    show_stats && foreach(k -> _gemb_tiles_report(k, out[k], masks[k].area_km2, donors), mask_keys)
+    return Dict(k => out[k].gemb_dv for k in mask_keys)
+end
+
+# The data-quality report of one mask's ensemble (`process_gemb_tiles`'s `show_stats`).
+function _gemb_tiles_report(mask, o, area_km2, donors)
+    (; dgeotile, extrapolated, melt_offset, closure) = o
+    printstyled("$(mask): GEMB tiles read: $(length(dgeotile))\n"; color=:light_green)
+    @printf("  max |dv| closure error : %.3g km3\n", maximum(closure))
+    @printf("  melt vs GEMB's melt    : up to %.1f km3 (%s) -- the rain GEMB nets off its melt\n",
+            maximum(melt_offset), val(dgeotile)[argmax(melt_offset)])
+
+    borrowed = [id for id in val(dgeotile) if donors[id].donor != id]
+    if isempty(borrowed)
+        println("  every geotile has a GEMB tile of its own")
+    else
+        ice_km2 = Dict(id => sum(area_km2[geotile=At(id)]) for id in val(dgeotile))
+        sort!(borrowed; by=id -> ice_km2[id], rev=true)
+        total_km2 = sum(values(ice_km2))
+        @printf("  %d geotiles have no tile of their own and borrow the nearest (%.0f km2, %.3f%% of the ice):\n",
+                length(borrowed), sum(ice_km2[id] for id in borrowed),
+                100 * sum(ice_km2[id] for id in borrowed) / total_km2)
+        for id in first(borrowed, 10)
+            @printf("      %-28s %8.2f km2 <- %-28s %5.0f km, %5.1f%% of ice beyond its bands\n",
+                    id, ice_km2[id], donors[id].donor, donors[id].distance_km,
+                    100 * extrapolated[At(id)])
+        end
+        length(borrowed) > 10 && println("      ... $(length(borrowed) - 10) more, all smaller")
+    end
+
+    beyond = findall(>(0), collect(extrapolated))
+    if isempty(beyond)
+        println("  every ice-bearing height bin is covered by a GEMB band")
+    else
+        order = beyond[sortperm(collect(extrapolated)[beyond]; rev=true)]
+        @printf("  %d geotiles have ice beyond the band range (median %.2f%%):\n",
+                length(beyond), 100 * median(collect(extrapolated)[beyond]))
+        for i in first(order, 10)
+            @printf("      %-28s %6.2f%% of ice area\n", val(dgeotile)[i], 100 * extrapolated[i])
+        end
+    end
+    return nothing
 end

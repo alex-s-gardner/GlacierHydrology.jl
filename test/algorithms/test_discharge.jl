@@ -29,7 +29,7 @@ using DataFrames
         @test km3[:discharge][geotile=At(dgeotile[2])] ≈ 7.0 * 1000 / GlacierHydrology.δice
     end
 
-    @testset "geotile discharge column is D·1000/δice km³ per year, accumulated" begin
+    @testset "geotile discharge column is D Gt per year, accumulated" begin
         D = 4.0 # Gt/yr
         id = "lat[+60+62]lon[-142-140]"
         dgeotile = Dim{:geotile}([id])
@@ -57,8 +57,9 @@ using DataFrames
                                                              discharge, geotiles0, area_km2)
 
             Δdecyear = GlacierHydrology.decimalyear.(ddate) .- GlacierHydrology.decimalyear(first(ddate))
-            @test out[1, :discharge] ≈ D * 1000 / GlacierHydrology.δice .* Δdecyear
-            @test colmetadata(out, "discharge", "units") == "km3 [i.e.]"
+            # Accumulated in km³ ice equivalent and stored in Gt, so D back again.
+            @test out[1, :discharge] ≈ D .* Δdecyear
+            @test colmetadata(out, "discharge", "units") == "Gt"
 
             # a Gt/yr discharge is rejected rather than read as km³
             discharge_gt = GlacierHydrology.discharge2geotile(DataFrame(longitude=[-141.0], latitude=[61.0], discharge_gtyr=[D]), dgeotile)

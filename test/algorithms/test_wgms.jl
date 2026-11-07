@@ -81,12 +81,11 @@ end
 band_row(g, y, lo, hi) = "XX,G,$g,$y,$lo,$hi,,,,,,,,"
 
 # A model whose balance rate is α + β z [m w.e. d⁻¹] at every band and time: levels on daily steps.
-function linear_rate_model(centers, t0, t1; α=0.01, β=-1e-5, refreeze_rate=0.001, height_rate=0.02)
+function linear_rate_model(centers, t0, t1; α=0.01, β=-1e-5, refreeze_rate=0.001)
     time = collect(DateTime(t0):Day(1):DateTime(t1))
     d = [Dates.value(t - first(time)) / 86_400_000 for t in time]
     rate = α .+ β .* centers
-    return GlacierHydrology.GEMBBandSMB(centers, time, d * rate', d * fill(refreeze_rate, length(centers))',
-                           d * fill(height_rate, length(centers))')
+    return GlacierHydrology.GEMBBandSMB(centers, time, d * rate', d * fill(refreeze_rate, length(centers))')
 end
 
 # Matched records of one configuration: glacier specs carry `id`, `region`, `area` [km²], `source`,
@@ -209,7 +208,6 @@ spec(id, region, area, source, provenance; years=2000:2001, elevations=(2000, 21
             days = Dates.value(r.end_date - r.begin_date)
             @test r.model ≈ (α + β * r.z_lo) * days rtol = 1e-12
             @test r.model_refreeze ≈ 0.001 * days rtol = 1e-12
-            @test r.model_dh ≈ 0.02 * days rtol = 1e-12
             # Date uncertainty is 0 for these records, so the envelope collapses.
             @test r.model_date_lo ≈ r.model_date_hi ≈ r.model
         end
@@ -245,7 +243,7 @@ spec(id, region, area, source, provenance; years=2000:2001, elevations=(2000, 21
     end
 
     @testset "tile file at fitted corrections, bilinear across the forcing nodes" begin
-        tile_dir = mkpath(joinpath(mktempdir(), "tile_runs_v2"))
+        tile_dir = mkpath(joinpath(mktempdir(), "tile_runs_v2", "B-kfit-table"))
         path = joinpath(tile_dir, "N46_E008.nc")
         times = DateTime(2009, 9, 6, 23) .+ Week.(0:60)
         centers = [2450.0, 2550.0, 2650.0]
@@ -258,6 +256,10 @@ spec(id, region, area, source, provenance; years=2000:2001, elevations=(2000, 21
         Rf = [d + 2.0 for t in times, z in centers, d in dts, p in pss]
         NCDataset(path, "c") do ds
             ds.attrib["geotile_id"] = "lat[+46+48]lon[+008+010]"
+            parameters = Dict("software_gemb_tree" => "1", "software_gemb_climateforcing_tree" => "2",
+                              "software_gemb_glaciersims_tree" => "3", "physics_member" => "B-kfit-table")
+            foreach(((k, v),) -> ds.attrib[k] = v, parameters)
+            ds.attrib["run_parameters"] = join(sort(collect(keys(parameters))), " ")
             defDim(ds, "time", length(times)); defDim(ds, "band", 3)
             defDim(ds, "delta_temperature", 2); defDim(ds, "precipitation_scaling", 2)
             defVar(ds, "time", times, ("time",); attrib=Dict("units" => "hours since 1950-01-01 00:00:00"))
@@ -277,14 +279,13 @@ spec(id, region, area, source, provenance; years=2000:2001, elevations=(2000, 21
             @test m.smb[:, j] ≈ k .* (10p - 3(d + 1) - 0.01(z - 2450) - 0.5) ./ 1000 rtol = 1e-6
             @test m.refreeze[:, j] ≈ k .* (d + 2) ./ 1000 rtol = 1e-6
         end
-        @test isnothing(m.height)
         @test_throws "outside the forcing grid" GlacierHydrology.gemb_tile_band_smb(path; pscale=2.5, ΔT=0.0)
 
         fits = DataFrame(id=["lat[+46+48]lon[+008+010]", "lat[+64+66]lon[-020-018]"], pscale=[p, 1.0], ΔT=[d, 0.0])
-        model = GlacierHydrology.wgms_tile_model(tile_dir, fits)
+        model = GlacierHydrology.wgms_tile_model(tile_dir, fits; physics_member="B-kfit-table")
         @test model("lat[+46+48]lon[+008+010]").smb ≈ m.smb
         @test isnothing(model("lat[+64+66]lon[-020-018]"))     # fitted, but no tile file
-        uncal = GlacierHydrology.wgms_tile_model(tile_dir, fits; pscale=1.0, ΔT=0.0)
+        uncal = GlacierHydrology.wgms_tile_model(tile_dir, fits; physics_member="B-kfit-table", pscale=1.0, ΔT=0.0)
         @test uncal("lat[+46+48]lon[+008+010]").smb[end, 1] ≈ length(times) * (10 - 3 - 0.5) / 1000 rtol = 1e-6
     end
 
@@ -325,18 +326,6 @@ spec(id, region, area, source, provenance; years=2000:2001, elevations=(2000, 21
         @test ratio.n_pairs == [36]
         @test ratio.obs_ratio[1] ≈ mean(df.obs[w]) / mean(-df.obs[s])
         @test ratio.model_ratio[1] ≈ mean(df.model[w]) / mean(-df.model[s])
-    end
-
-    @testset "snow densities from a column" begin
-        dz, rho = [0.5, 0.5, 1.0], [300.0, 400.0, 500.0]
-        @test GlacierHydrology.top_mass_bulk_density(dz, rho, 150) ≈ 300
-        @test GlacierHydrology.top_mass_bulk_density(dz, rho, 350) ≈ 350 / (0.5 + 0.5)
-        @test GlacierHydrology.top_mass_bulk_density(dz, rho, 600) ≈ 600 / (1.0 + 250 / 500)
-        @test_throws "holds 850.0 kg m-2, less than" GlacierHydrology.top_mass_bulk_density(dz, rho, 900)
-        age = [20.0, 100.0, 400.0]
-        y = GlacierHydrology.young_snow_bulk_density(dz, rho, age, 200)
-        @test (y.mass, y.depth, y.density) == (350.0, 1.0, 350.0)
-        @test isnan(GlacierHydrology.young_snow_bulk_density(dz, rho, age, 10).density)
     end
 
     @testset "end to end: the true model scores zero error" begin

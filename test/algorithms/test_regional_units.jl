@@ -70,10 +70,12 @@ using Dates
         run = joinpath(dir, "glacier_dh_best_nmad5_v01_filled_ac_p1_synthesized.jld2")
         write_mock_volume_product(run, zeros(dgeotile, ddate), area_km2)
         out = GlacierHydrology.individual_geotile_synthesis_gembfit_dv(run, gemb, gemb_fit, discharge, geotiles0, area_km2)
-        GlacierHydrology.FileIO.save(replace(run, ".jld2" => "_gembfit_dv.jld2"), Dict("geotiles" => out))
+        member = GlacierHydrology.gemb_reference_physics_member
+        file = GlacierHydrology.gembfit_dv_path(run, member)
+        mkpath(dirname(file))
+        GlacierHydrology.FileIO.save(file, Dict("geotiles" => out))
 
-        # The run has no physics members, so its synthesis is beside it.
-        regional = GlacierHydrology.runs2rgi([run]; physics_member=nothing)
+        regional = GlacierHydrology.runs2rgi([run]; physics_member=member)
 
         # Hand values. km³ ice equivalent -> Gt is ×917/1000.
         ρ = big"917"
@@ -108,12 +110,12 @@ using Dates
             end
         end
 
-        @testset "runs2rgi: a GEMB mass component is the km³ sum × δice/1000" begin
-            # The same sum, built from the geotile columns of the file, which are km³ i.e.
-            @test all(colmetadata(out, v, "units") == "km3 [i.e.]" for v in ("acc", "runoff", "smb", "discharge"))
-            @test colmetadata(out, "dm", "units") == "Gt"
-            for v in ("acc", "melt", "refreeze", "ec", "rain", "runoff", "smb")
-                @test series(v, 99) ≈ sum(out[!, v]) .* (GlacierHydrology.δice / 1000) rtol = 1e-12
+        @testset "the geotile columns hold masses in Gt and volumes in km³" begin
+            @test all(colmetadata(out, v, "units") == "Gt" for v in ("acc", "runoff", "smb", "discharge", "dm", "dm_altim"))
+            @test all(colmetadata(out, v, "units") == "km3" for v in ("dv", "dv_altim", "fac"))
+            # The regional sum is the sum of the geotile columns.
+            for v in ("acc", "melt", "refreeze", "ec", "rain", "runoff", "smb", "fac")
+                @test series(v, 99) ≈ sum(out[!, v]) rtol = 1e-12
             end
         end
 
@@ -167,8 +169,8 @@ using Dates
             bad = joinpath(dir, "glacier_dh_best_nmad3_v01_filled_ac_p1_synthesized.jld2")
             out_bad = copy(out)
             colmetadata!(out_bad, "runoff", "units", "m", style=:note)
-            GlacierHydrology.FileIO.save(replace(bad, ".jld2" => "_gembfit_dv.jld2"), Dict("geotiles" => out_bad))
-            @test_throws "mass column runoff has units \"m\"" GlacierHydrology.runs2rgi([bad]; physics_member=nothing)
+            GlacierHydrology.FileIO.save(GlacierHydrology.gembfit_dv_path(bad, member), Dict("geotiles" => out_bad))
+            @test_throws "mass column runoff has units \"m\", expected \"Gt\"" GlacierHydrology.runs2rgi([bad]; physics_member=member)
         end
 
         @testset "runs2rgi_physics: GEMB physics members as a dimension beside the runs" begin
@@ -177,9 +179,9 @@ using Dates
             twice = deepcopy(out)
             foreach(x -> x .*= 2, twice.acc)
             for (m, synthesis) in zip(members, (out, twice))
-                file = GlacierHydrology.gemb_physics_path(replace(run, ".jld2" => "_gembfit_dv.jld2"), m)
-                mkpath(dirname(file))
-                GlacierHydrology.FileIO.save(file, Dict("geotiles" => synthesis))
+                f = GlacierHydrology.gembfit_dv_path(run, m)
+                mkpath(dirname(f))
+                GlacierHydrology.FileIO.save(f, Dict("geotiles" => synthesis))
             end
             # By default the reference member is read, which is the first here.
             @test members[1] == GlacierHydrology.gemb_reference_physics_member

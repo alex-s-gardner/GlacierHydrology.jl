@@ -85,17 +85,15 @@ end
 
 # 13. Calibrate GEMB (Glacier Energy and Mass Balance) model to altimetry data by finding optimal fits for grouped geotiles 
 # [4 hrs on 128 cores, 150GB of memory]
-# `gemb_calibration` throws while `GlacierHydrology.gemb_forcing_prior_run_id` differs from `gemb_run_id`: the
-# forcing prior and its penalty weight describe one GEMB run and are re-derived for each new one.
-
+# The forcing prior and its penalty weight are the GEMB run's (`GlacierHydrology.GEMB_RUNS`); a run whose
+# prior is not derived yet is fitted unpenalized.
 GlacierHydrology.gemb_calibration(
-    path2runs_synthesized, 
+    path2runs_synthesized,
     Dict(m => g[:dv] for (m, g) in gemb);
     geotile_width,
-    geotile_grouping_min_feature_area_km2=100, 
+    geotile_grouping_min_feature_area_km2=100,
     single_geotile_test,
     seasonality_weight=GlacierHydrology.seasonality_weight,
-    distance_from_origin_penalty=GlacierHydrology.distance_from_origin_penalty,
     ΔT_to_pscale_weight=GlacierHydrology.ΔT_to_pscale_weight,
     force_remake_before=force_remake_before_gemb,
     calibrate_to=:all
@@ -118,11 +116,12 @@ rgi2plot = [99]
 f = GlacierHydrology.plot_ensemble_rgi_timeseries(vars2plot, path2runs_synthesized;  center_on_dates=DateTime(2002, 5, 1):Month(1):DateTime(2005, 12, 15), rgi2plot)
 display.(f);
 
-f = GlacierHydrology.plot_ref_pscale_ΔT_summary(path2runs_synthesized, binned_synthesized_dv_file_ref; rgi2plot, seasonality_weight=GlacierHydrology.seasonality_weight, distance_from_origin_penalty=GlacierHydrology.distance_from_origin_penalty, ΔT_to_pscale_weight=GlacierHydrology.ΔT_to_pscale_weight);
+distance_from_origin_penalty = GlacierHydrology.gemb_info(; gemb_run_id, physics_member=gemb_physics_member).distance_from_origin_penalty
+f = GlacierHydrology.plot_ref_pscale_ΔT_summary(path2runs_synthesized, ens.synthesized_ref, gemb_physics_member; rgi2plot, seasonality_weight=GlacierHydrology.seasonality_weight, distance_from_origin_penalty, ΔT_to_pscale_weight=GlacierHydrology.ΔT_to_pscale_weight);
 display.(f);
 
 for i in eachindex(rgi2plot)
-    fname = "RGI$(rgi2plot[i])_Ws$(GlacierHydrology.seasonality_weight)_Wd$(GlacierHydrology.distance_from_origin_penalty)_Wm2p$(GlacierHydrology.ΔT_to_pscale_weight).png"
+    fname = "RGI$(rgi2plot[i])_Ws$(GlacierHydrology.seasonality_weight)_Wd$(distance_from_origin_penalty)_Wm2p$(GlacierHydrology.ΔT_to_pscale_weight).png"
     CairoMakie.save(joinpath(GlacierHydrology.pathlocal[:figures], fname), f[i])
 end
 

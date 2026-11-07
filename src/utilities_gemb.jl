@@ -18,7 +18,7 @@ across connected glacierized regions.
 Uses a staged, deterministic grid search (`_gemb_grid_minimize`) to find the `pscale` (precipitation
 scaling) and `ΔT` (air temperature offset, K) that minimize the cost function between modeled GEMB
 volume changes and altimetry observations. The cost function balances temporal agreement, seasonal cycle
-matching, and distance from the empirical forcing prior `gemb_forcing_prior` (`origin_penalty_mode =
+matching, and distance from the empirical forcing prior `forcing_prior` (`origin_penalty_mode =
 :prior`, the default) or from the no-op values 1 for `pscale` and 0 for `ΔT` (`:legacy`).
 
 # Arguments
@@ -71,7 +71,7 @@ function gemb_bestfit_grouped(dv_altim, dv_gemb, geotiles0;
     calibrate_to=:all,
     is_scaling_factor=Dict("pscale" => true, "ΔT" => false),
     origin_penalty_mode=:prior,
-    forcing_prior=gemb_forcing_prior
+    forcing_prior=nothing
 )
 
     if ΔT_to_pscale_weight > 1 || ΔT_to_pscale_weight < 0
@@ -299,16 +299,20 @@ end
 
 
 """
-    gemb_calibration(path2runs; surface_mask_default="glacier", gemb_run_id, geotile_grouping_min_feature_area_km2=100, single_geotile_test=nothing, force_remake_before)
+    gemb_calibration(path2runs, dv_gemb; geotile_width=2, geotile_grouping_min_feature_area_km2=100,
+                     single_geotile_test=nothing, seasonality_weight, distance_from_origin_penalty=nothing,
+                     forcing_prior=nothing, force_remake_before=nothing, ...)
 
 Calibrate GEMB (Glacier Energy and Mass Balance) model to altimetry data by finding optimal fits for grouped geotiles.
 
 # Arguments
 - `path2runs`: Array of file paths to binned synthesized data files
-- `surface_mask_default`: Default surface mask type (default: "glacier")
-- `gemb_run_id`: GEMB run identifier
+- `dv_gemb`: the `dv` layer of [`gemb_ensemble_dv`](@ref), whose metadata names its GEMB run
 - `geotile_grouping_min_feature_area_km2`: Minimum feature area in km² for geotile grouping (default: 100)
 - `single_geotile_test`: Single geotile ID for testing (default: nothing)
+- `distance_from_origin_penalty`, `forcing_prior`: the forcing-prior penalty; `nothing` takes the GEMB
+  run's ([`GEMB_RUNS`](@ref)). A positive penalty needs a prior, so a run without one throws unless a
+  `forcing_prior` is passed or the penalty is 0.
 - `force_remake_before`: Date to force file regeneration (default: nothing)
 
 # Description
@@ -322,13 +326,13 @@ A fit against a GEMB physics member's ensemble ([`gemb_physics_member`](@ref)) i
 member's folder ([`gemb_physics_path`](@ref)), so the fits of different members never share a file.
 Throws if the member `dv_gemb` records disagrees with the one its tile provenance names.
 
-The pilot sweep (GEMB run 10) covers a subset of tiles, so two defaults follow the run id `dv_gemb`
-records:
-- `complete_groups_only` (default `true` for run 10, `false` otherwise): fit only the geotile groups
+A run whose sweep covers a subset of tiles (`partial_coverage`, the pilot GEMB run 10) changes two
+defaults:
+- `complete_groups_only` (default `true` for such a run, `false` otherwise): fit only the geotile groups
   whose every geotile is in `dv_gemb`, so no group is fitted on part of its ice;
-- `pscale_sanity_check` (default `false` for run 10, `true` otherwise): the fitted-pscale windows of
-  two reference geotiles. It cannot be turned off for any other run, and with it on, a fit that does
-  not include both geotiles throws.
+- `pscale_sanity_check` (default `false` for such a run, `true` otherwise): the fitted-pscale windows of
+  two reference geotiles. It cannot be turned off for a run covering every tile, and with it on, a fit
+  that does not include both geotiles throws.
 """
 function gemb_calibration(
     path2runs,
@@ -337,28 +341,21 @@ function gemb_calibration(
     geotile_grouping_min_feature_area_km2=100,
     single_geotile_test=nothing,
     seasonality_weight=GlacierHydrology.seasonality_weight,
-    distance_from_origin_penalty=2 / 100,
+    distance_from_origin_penalty=nothing,
     ΔT_to_pscale_weight=1,
     force_remake_before=nothing,
     calibrate_to = :all,
     origin_penalty_mode=:prior,
-    forcing_prior=gemb_forcing_prior,
+    forcing_prior=nothing,
     complete_groups_only=nothing,
     pscale_sanity_check=nothing
 )
-    pilot = get(DD.metadata(dv_gemb), "gemb_run_id", nothing) == 10
-    complete_groups_only = something(complete_groups_only, pilot)
-    pscale_sanity_check = something(pscale_sanity_check, !pilot)
-    pscale_sanity_check || pilot ||
-        error("pscale_sanity_check can be turned off only for the pilot sweep (GEMB run 10)")
-
-    # `dv_gemb` is area-weighted by one surface mask's hypsometry, so every run must use that mask
-
     if !isnothing(single_geotile_test)
         # NOTE: don't prematurely trim data to `single_geotile_test` as fit optimization is done by geotile groups
         @warn "!!!!!!!!!!!!!! SINGLE GEOTILE TEST [$(single_geotile_test)], OUTPUT WILL NOT BE SAVED TO FILE  !!!!!!!!!!!!!!"
     end
 
+    # `dv_gemb` is area-weighted by one surface mask's hypsometry, so every run must use that mask
     dgeotile = dims(dv_gemb, :geotile)
     params = binned_filled_fileparts.(path2runs)
     surface_masks = unique(getindex.(params, :surface_mask))
@@ -367,18 +364,20 @@ function gemb_calibration(
         error("dv_gemb is built on the $(gemb_mask) surface mask but path2runs uses $(join(surface_masks, ", ")); " *
               "pass a Dict of surface mask => dv_gemb to calibrate each run against its own mask")
 
-    # The prior describes one GEMB run's forcing bias; centring the penalty on it for another run pulls
-    # every fit toward the wrong model's bias.
-    if origin_penalty_mode == :prior && distance_from_origin_penalty != 0
-        gemb_run_id = get(DD.metadata(dv_gemb), "gemb_run_id", nothing)
-        isnothing(gemb_run_id) &&
-            error("dv_gemb does not record its gemb_run_id; load it with gemb_ensemble_dv")
-        forcing_prior === gemb_forcing_prior && gemb_run_id != gemb_forcing_prior_run_id &&
-            error("gemb_forcing_prior and distance_from_origin_penalty were derived from GEMB run " *
-                  "$(gemb_forcing_prior_run_id) fits, not run $(gemb_run_id). Re-derive both from run " *
-                  "$(gemb_run_id)'s unpenalized fits (distance_from_origin_penalty = 0) and update them " *
-                  "with gemb_forcing_prior_run_id, or pass a forcing_prior derived for run $(gemb_run_id).")
-    end
+    gemb_run_id = get(DD.metadata(dv_gemb), "gemb_run_id", nothing)
+    haskey(GEMB_RUNS, gemb_run_id) ||
+        error("dv_gemb records GEMB run $(repr(gemb_run_id)), which is not defined; load it with gemb_ensemble_dv")
+    run = GEMB_RUNS[gemb_run_id]
+    complete_groups_only = something(complete_groups_only, run.partial_coverage)
+    pscale_sanity_check = something(pscale_sanity_check, !run.partial_coverage)
+    pscale_sanity_check || run.partial_coverage ||
+        error("pscale_sanity_check can be turned off only for a sweep over a subset of tiles (GEMB run 10)")
+
+    distance_from_origin_penalty = something(distance_from_origin_penalty, run.distance_from_origin_penalty)
+    forcing_prior = something(forcing_prior, Some(run.forcing_prior))
+    origin_penalty_mode == :prior && distance_from_origin_penalty != 0 && isnothing(forcing_prior) &&
+        error("GEMB run $(gemb_run_id) has no forcing prior: fit it unpenalized (distance_from_origin_penalty = 0), " *
+              "derive the prior from those fits, and record it in GEMB_RUNS, or pass a forcing_prior")
 
     # Each output records the tile sweep it was fitted on (`write_gembfit_provenance`), which
     # GEMB_GlacierSims' native run requires before it applies the corrections.
@@ -471,17 +470,6 @@ function gemb_calibration(
             geotiles[surface_mask] = geotiles[surface_mask][(geotiles[surface_mask].group .== geotiles[surface_mask][index_geotile, :group]), :]
         end
 
-        if false
-            @warn "testing subset"
-            index_test = falses(nrow(geotiles[surface_mask]))
-            for geotile_test in dgeotile_test
-                index_geotile_test = findfirst(geotiles[surface_mask].id .== geotile_test)
-                index_test .|= (geotiles[surface_mask].group .== geotiles[surface_mask].group[index_geotile_test])
-            end
-        
-            geotiles[surface_mask] = geotiles[surface_mask][index_test, :]
-        end
-
         # add a single rgi column
         add_single_rgi_column!(geotiles[surface_mask])
     end
@@ -530,7 +518,7 @@ function gemb_calibration(
                 for geotile_test in (pscale_sanity_check ? dgeotile_test : String[])
                     any(==(geotile_test), gembfit.id) || error(
                         "pscale sanity geotile $(geotile_test) is not in the fit; it is checked for " *
-                        "every run but the pilot sweep (GEMB run 10)")
+                        "every run whose sweep covers every tile")
                     geotile_sanity_check = geotile_test
                     gt_index = findfirst(gembfit.id .== geotile_sanity_check)
                     geotile_row = gembfit[gt_index, :]
@@ -668,7 +656,7 @@ function _select_by_surface_mask(by_mask::AbstractDict, path2runs; name)
 end
 
 """
-    gemb_ensemble_dv(; gemb_run_id=9, surface_mask, physics_member=nothing)
+    gemb_ensemble_dv(; gemb_run_id=9, surface_mask, physics_member)
 
 Load the GEMB geotile volume-change ensemble of run `gemb_run_id`, area-weighted by the hypsometry of
 `surface_mask`, and add the derived variables (see [`gemb_add_derived_vars!`](@ref)).
@@ -677,22 +665,22 @@ Load the GEMB geotile volume-change ensemble of run `gemb_run_id`, area-weighted
 - `gemb_run_id`: Identifier for the GEMB run.
 - `surface_mask`: Surface mask the ensemble was built on, e.g. `:glacier` or `:glacier_rgi7`. Altimetry
   members are calibrated against the ensemble of their own mask.
-- `physics_member`: the GEMB physics member of a run that has them (see [`gemb_info`](@ref)).
+- `physics_member`: the GEMB physics member (see [`gemb_info`](@ref)).
 
 # Returns
 - DimStack over (geotile, date, pscale, ΔT) in km³ of ice equivalent. Every layer records
-  `surface_mask` (see [`gemb_surface_mask`](@ref)), `gemb_run_id` and `gemb_physics_member` (see
-  [`gemb_physics_member`](@ref)) in its metadata, and a tile run also the `tile_provenance` the file
-  was saved with ([`gemb_tile_provenance`](@ref)). That throws if the file records none, was built
+  `surface_mask` (see [`gemb_surface_mask`](@ref)), `gemb_run_id`, `gemb_physics_member` (see
+  [`gemb_physics_member`](@ref)) and the `tile_provenance` the file was saved with
+  ([`gemb_tile_provenance`](@ref)) in its metadata. Throws if the file records no provenance, was built
   from a tile directory other than the run's `tile_dir`, or from tiles of another physics member.
 
 # Examples
 ```julia
-julia> dv_gemb = gemb_ensemble_dv(; gemb_run_id=8, surface_mask=:glacier_rgi7)
+julia> dv_gemb = gemb_ensemble_dv(; gemb_run_id=9, surface_mask=:glacier_rgi7, physics_member=gemb_reference_physics_member)
 julia> smb = dv_gemb[:smb]
 ```
 """
-function gemb_ensemble_dv(; gemb_run_id=9, surface_mask, physics_member=nothing)
+function gemb_ensemble_dv(; gemb_run_id=9, surface_mask, physics_member)
     gembinfo = gemb_info(; gemb_run_id, physics_member)
     gemb_geotile_filename_dv = gemb_geotile_dv_file(gembinfo, surface_mask)
     file_surface_mask, dv_gemb = FileIO.load(gemb_geotile_filename_dv, "surface_mask", "gemb_dv")

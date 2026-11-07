@@ -57,9 +57,12 @@ Scripts load the package with `import GlacierHydrology` and qualify every name
 - **Ensemble:** `ensemble_paths()` gives the path of every altimetry member in each form the pipeline
   uses (filled, synthesized, calibrated), from `GVC.ensemble_members` and `GVC.reference_member`. Errors
   are ensemble spreads about the reference member (`error_quantile = 0.95`, `error_scaling = 1.5`).
-- **GEMB runs and physics members:** `gemb_info(; gemb_run_id, physics_member)`.
+- **GEMB runs and physics members:** `gemb_info(; gemb_run_id, physics_member)`, from the settings of
+  each run in `GEMB_RUNS`.
   - Run 9 is the production sweep (`$CLIMATE_CACHE/tile_runs_v2/<member>/`).
-  - Run 10 is the pilot (`tile_runs_pilot`), on `gemb_pilot_forcing_grid`.
+  - Run 10 is the pilot (`tile_runs_pilot`), on `gemb_pilot_forcing_grid`. Its sweep covers a subset of
+    tiles (`partial_coverage`), so it is binned on the geotiles with a tile of their own and calibrated
+    on the geotile groups wholly inside it.
   - A physics member such as `S-kfit-table` names the grain-growth, decoupling and impurity levels of the
     sweep, with optional wind (`w<factor>`, `ws`) and precipitation-gradient (`g<g>`, applied here)
     tokens (`gemb_physics_member_parts`). Production uses GEMB_GlacierSims' default member,
@@ -68,18 +71,21 @@ Scripts load the package with `import GlacierHydrology` and qualify every name
   - Calibrated outputs of a member go to `gemb_physics/<member>/` beside the altimetry files
     (`gemb_physics_path`).
 - **Calibration cost:** the RMS of the residual blended with its seasonal amplitude
-  (`seasonality_weight = 0.85`), times `1 + wd·d`. Here `d` is the Mahalanobis distance from the empirical
-  forcing prior `gemb_forcing_prior` and `wd = distance_from_origin_penalty = 0.35`.
-  - The prior and `wd` were derived from GEMB run 8 (`gemb_forcing_prior_run_id`).
-  - `gemb_calibration` throws when they would be applied to another run. Re-derive all three from that
-    run's unpenalized fits (`distance_from_origin_penalty = 0`) and update them together.
+  (`seasonality_weight = 0.85`), times `1 + wd·d`. Here `d` is the Mahalanobis distance from the
+  empirical forcing prior and `wd = distance_from_origin_penalty`, both the GEMB run's (`GEMB_RUNS`).
+  - Neither run has a prior yet, so both calibrate unpenalized. Derive a run's prior and `wd` from its
+    unpenalized fits by the temporal cross-validation of the method record, then record them in
+    `GEMB_RUNS`.
   - The method record is `notes/methods_2026-10_seasonal_cycle_and_calibration.md`.
-- **Dates:** GEMB is binned on the 30-day bins of `GVC.project_date_bins`, extended back to 1970, as the
-  altimetry is. `gemb_calibration` throws if the two date axes differ over their common span.
+- **Dates:** GEMB is binned on the calendar months of `GVC.project_date_bins(; start=Date(1970, 1, 1))`,
+  the altimetry's grid from an earlier start. `gemb_calibration` throws if the two date axes differ over
+  their common span.
 - **Freshness:** steps 12–14 rebuild any file older than the GEMB ensemble they descend from
   (`gemb_ensemble_built`). `file_is_current` compares modification times in UTC.
-- **Units:** GEMB volumes are km³ of ice equivalent. Masses are Gt, using `δice = 917` kg m⁻³ (the
-  density the GEMB runs record), and `Unitful.register(GlacierHydrology.MyUnits)` is needed for `Gt`.
+- **Units:** GEMB volumes are km³ of ice equivalent. The calibrated synthesis (`_gembfit_dv`) stores
+  every mass in Gt and every volume (`dv`, `dv_altim`, `fac`) in km³, each column's unit in its
+  `"units"` metadata; the conversion uses `δice = 917` kg m⁻³ (the density the GEMB runs record) and
+  happens there only. `Unitful.register(GlacierHydrology.MyUnits)` is needed for `Gt`.
 
 ## Layout
 

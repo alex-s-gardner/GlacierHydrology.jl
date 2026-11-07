@@ -668,12 +668,16 @@ function plot_point_location_river_flux(land_flux, glacier_flux, snow_flux; date
 end
 
 
-function plot_ref_pscale_ΔT_summary(path2runs_synthesized, binned_synthesized_dv_file_ref; rgi2plot=[99], seasonality_weight=seasonality_weight, distance_from_origin_penalty=distance_from_origin_penalty, ΔT_to_pscale_weight=ΔT_to_pscale_weight, show_title=true, bin_width=0.25)
+"""
+    plot_ref_pscale_ΔT_summary(path2runs_synthesized, ensemble_reference_file, physics_member;
+                               rgi2plot=[99], seasonality_weight, distance_from_origin_penalty,
+                               ΔT_to_pscale_weight, show_title=true, bin_width=0.25)
 
-    # The reference run's calibrated synthesis is in its physics member's folder; the altimetry
-    # member it was synthesized from is not.
-    dv_ref, physics_member = gemb_physics_source(binned_synthesized_dv_file_ref)
-    ensemble_reference_file = replace(dv_ref, "_gembfit_dv.jld2" => ".jld2")
+Regional summary and the distribution of the fitted `pscale` and `ΔT` of the reference altimetry member
+(`ensemble_reference_file`, a `…_synthesized.jld2`) calibrated against `physics_member`. The weights only
+label the title.
+"""
+function plot_ref_pscale_ΔT_summary(path2runs_synthesized, ensemble_reference_file, physics_member; rgi2plot=[99], seasonality_weight=seasonality_weight, distance_from_origin_penalty, ΔT_to_pscale_weight=ΔT_to_pscale_weight, show_title=true, bin_width=0.25)
 
     region_fits = ensemble_summary(path2runs_synthesized, ensemble_reference_file; physics_member)
     gemb_fit = GeoDataFrames.read(gembfit_path(ensemble_reference_file, physics_member))
