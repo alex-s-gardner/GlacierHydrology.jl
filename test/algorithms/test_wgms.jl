@@ -114,6 +114,10 @@ spec(id, region, area, source, provenance; years=2000:2001, elevations=(2000, 21
         @test ismissing(wgms.points.latitude[3]) && ismissing(wgms.glacier_years.time_system[2])
         @test !("winter_balance" in names(wgms.glacier_years))   # glacier-wide balances are not read
         @test all(ismissing, wgms.glacier_years.area) && all(ismissing, wgms.glaciers.area_km2)
+        # FoG 2026-02-10 adds the `measured` time system.
+        measured = GlacierHydrology.read_wgms(write_fog(joinpath(mktempdir(), "data");
+            mb=[replace(_MB[1], ",floating," => ",measured,"); _MB[2:end]]))
+        @test measured.glacier_years.time_system[1] == "measured"
 
         bad(f; kw...) = GlacierHydrology.read_wgms(write_fog(joinpath(mktempdir(), "data"); kw...))
         @test_throws "lacks column(s) balance_code" bad(nothing; point_header=replace(_POINT_HEADER, "balance_code" => "code"))

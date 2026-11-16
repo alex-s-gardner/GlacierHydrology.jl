@@ -15,7 +15,7 @@
 # exclusions are returned as records with a reason, so every count can be reported.
 
 const WGMS_BALANCE_CODES = ("annual", "summer", "winter", "index")
-const WGMS_TIME_SYSTEMS = ("floating", "fixed", "stratigraphic", "combined", "other")
+const WGMS_TIME_SYSTEMS = ("floating", "fixed", "stratigraphic", "combined", "measured", "other")
 const WGMS_GTNG_REGIONS = ("01_alaska", "02_western_canada_usa", "03_arctic_canada_north",
     "04_arctic_canada_south", "05_greenland_periphery", "06_iceland", "07_svalbard_jan_mayen",
     "08_scandinavia", "09_russian_arctic", "10_north_asia", "11_central_europe",
