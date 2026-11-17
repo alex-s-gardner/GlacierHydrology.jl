@@ -184,7 +184,7 @@ const GEMB_TILE_PROVENANCE_REQUIRED = ("software_gemb_tree", "software_gemb_clim
                                        "software_gemb_glaciersims_tree")
 
 """
-    gemb_tile_provenance(tile_dir, tiles; physics_member) -> Dict{String,Any}
+    gemb_tile_provenance(tile_dir, tiles; physics_member, mixed_software=false) -> Dict{String,Any}
 
 The tile sweep the tiles `tiles` (in `tile_dir`; [`GEMBTile`](@ref)s from [`gemb_tile_coverage`](@ref))
 come from, as GEMB_GlacierSims' `assert_corrections_fitted_on` reads it from a calibration's
@@ -198,35 +198,50 @@ Only the `software_*` parameters (package versions and source trees) and the `ph
 a sweep, while the `model_*` and downscaling parameters are resolved tile by tile, and
 GEMB_GlacierSims compares each recorded key with every reference tile it runs against.
 
+With `mixed_software = true` the tiles may record different `software_*` parameters, as when some
+tiles of a sweep were rerun on newer code. `"tile_run_parameters"` is then the combination recorded by
+the most tiles (ties go to the one whose first file sorts first), and `"tile_run_parameter_variants"`
+lists every other combination with the tile files that record it, as
+`[Dict("tile_run_parameters" => …, "tiles" => [basename, …]), …]`, sorted by first file. The key is
+present only when there are variants. `physics_*` parameters must agree either way.
+
 Throws if a file lies outside `tile_dir`, lacks one of [`GEMB_TILE_PROVENANCE_REQUIRED`](@ref),
 records a `software_*` or `physics_*` parameter differently from another file (including recording
-one another lacks), or was run as a physics member other than `physics_member`.
+one another lacks), or was run as a physics member other than `physics_member`. `software_*`
+differences are allowed when `mixed_software`.
 """
-function gemb_tile_provenance(tile_dir, tiles; physics_member)
+function gemb_tile_provenance(tile_dir, tiles; physics_member, mixed_software=false)
     isempty(tiles) && error("no GEMB tile files to record the provenance of")
     dir = realpath(tile_dir)
     outside = [t.path for t in tiles if dirname(realpath(t.path)) != dir]
     isempty(outside) || error("tile files outside $(dir): $(join(outside, ", "))")
 
-    recorded = nothing
-    reference = ""
+    # Each software combination and the files recording it; files are visited in sorted order.
+    groups = Dict{Dict{String,Any},Vector{String}}()
+    reference = nothing
     for tile in sort(unique(tiles); by=t -> t.path)
         software, path = tile.software, tile.path
         absent = [k for k in GEMB_TILE_PROVENANCE_REQUIRED if !haskey(software, k)]
         isempty(absent) || error("$(path) records no $(join(absent, ", ")), so the code its run came from is unknown")
         _check_gemb_physics_provenance(software, physics_member, path)
 
-        if isnothing(recorded)
-            recorded, reference = software, path
-            continue
-        end
-        for key in sort(collect(Base.union(keys(recorded), keys(software))))
-            a, b = get(recorded, key, nothing), get(software, key, nothing)
-            a == b || error("GEMB tile files disagree on $(key): $(repr(a)) in $(reference) but $(repr(b)) " *
+        isnothing(reference) && (reference = tile)
+        for key in sort(collect(Base.union(keys(reference.software), keys(software))))
+            mixed_software && startswith(key, "software_") && continue
+            a, b = get(reference.software, key, nothing), get(software, key, nothing)
+            a == b || error("GEMB tile files disagree on $(key): $(repr(a)) in $(reference.path) but $(repr(b)) " *
                             "in $(path); the ensemble would mix tile sweeps")
         end
+        push!(get!(Vector{String}, groups, software), path)
     end
-    return Dict{String,Any}("tile_dir" => dir, "tile_run_parameters" => recorded)
+
+    # Most files first, ties to the combination whose first file sorts first.
+    ranked = sort!(collect(groups); by=((_, paths),) -> (-length(paths), first(paths)))
+    provenance = Dict{String,Any}("tile_dir" => dir, "tile_run_parameters" => first(first(ranked)))
+    variants = [Dict{String,Any}("tile_run_parameters" => software, "tiles" => basename.(paths))
+                for (software, paths) in sort!(ranked[2:end]; by=((_, paths),) -> first(paths))]
+    isempty(variants) || (provenance["tile_run_parameter_variants"] = variants)
+    return provenance
 end
 
 # Geotile center as (longitude, latitude), the order `Distances.Haversine` takes.
@@ -599,7 +614,8 @@ end
 
 """
     process_gemb_tiles(masks; tile_dir, date_center, physics_member, coverage=gemb_tile_coverage(tile_dir),
-                       show_stats=true, max_donor_distance_km=2000, forcing_grid=nothing) -> Dict
+                       show_stats=true, max_donor_distance_km=2000, forcing_grid=nothing,
+                       mixed_software=false) -> Dict
     process_gemb_tiles(geotiles, area_km2; kwargs...) -> DimStack
 
 Build the GEMB volume-change ensemble from `GEMB_GlacierSims` tile NetCDF, for every surface mask at
@@ -612,7 +628,8 @@ ice equivalent. `smb`, `runoff` and `dv` are added later by `gemb_add_derived_va
 metadata `"tile_provenance"` is the [`gemb_tile_provenance`](@ref) of the tile files read, donors
 included, which must all have been run as `physics_member` (see [`gemb_tile_provenance`](@ref)), and
 every tile must share the first tile's forcing grid. `coverage` is the tile directory's
-[`gemb_tile_coverage`](@ref).
+[`gemb_tile_coverage`](@ref). `mixed_software` lets the tiles record different `software_*` parameters,
+listed in the provenance's variants ([`gemb_tile_provenance`](@ref)).
 
 `forcing_grid = (; pscale, ΔT)` builds the ensemble on those nodes instead, read by value from tiles
 that may carry more (a dense-grid tile beside reduced-grid ones); every tile must hold every node.
@@ -640,7 +657,7 @@ end
 
 function process_gemb_tiles(masks::AbstractDict; tile_dir, date_center, physics_member,
                             coverage=gemb_tile_coverage(tile_dir), show_stats=true,
-                            max_donor_distance_km=2000, forcing_grid=nothing)
+                            max_donor_distance_km=2000, forcing_grid=nothing, mixed_software=false)
     paths = gemb_tile_paths(coverage; covering=extrema(date_center))
     ids = unique(reduce(vcat, [collect(String, m.geotiles.id) for m in values(masks)]))
     donors = gemb_tile_donors(ids, paths; max_distance_km=max_donor_distance_km)
@@ -649,7 +666,7 @@ function process_gemb_tiles(masks::AbstractDict; tile_dir, date_center, physics_
     # From the files actually read, before the read: a mixed sweep fails here rather than after it.
     tile_provenance = _gemb_gradient_provenance(
         gemb_tile_provenance(tile_dir, [by_path[p] for p in unique(paths[d.donor] for d in values(donors))];
-                             physics_member=parts.tile_member), parts.precipitation_gradient)
+                             physics_member=parts.tile_member, mixed_software), parts.precipitation_gradient)
 
     subset = !isnothing(forcing_grid)
     grid = subset ?

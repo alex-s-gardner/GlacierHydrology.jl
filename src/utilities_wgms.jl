@@ -644,7 +644,8 @@ function gemb_tile_band_smb(path; pscale, ΔT)
 end
 
 """
-    wgms_tile_model(tile_dir, fits; physics_member, pscale=:pscale, ΔT=:ΔT, area_km2=nothing)
+    wgms_tile_model(tile_dir, fits; physics_member, pscale=:pscale, ΔT=:ΔT, area_km2=nothing,
+                    mixed_software=false)
         -> Function
 
 The `model` argument of [`wgms_model_balances`](@ref) for a GEMB_GlacierSims tile sweep in `tile_dir`
@@ -657,17 +658,19 @@ A geotile with no tile file of its own, or no fit, has no model: the comparison 
 series, not a donor's.
 
 Every tile file must have been run as `physics_member`'s tile member ([`gemb_tile_provenance`](@ref)),
-so a score cannot pair one member's tiles with another's fits. A member with a precipitation gradient
+so a score cannot pair one member's tiles with another's fits. `mixed_software` lets the tiles record
+different `software_*` parameters; pass the run's (`gemb_info(...).mixed_software`). A member with a precipitation gradient
 ([`gemb_physics_member_parts`](@ref)) reads each band at `pscale · m_b`, the multipliers the calibration
 applied ([`gemb_band_pscale_multipliers`](@ref)); it needs `area_km2`, the `(geotile, height)`
 hypsometry the calibration weighted bands with (`_geotile_area_km2`), since `m_b` is centred on it.
 Bands holding no ice in it are read at `pscale`.
 """
-function wgms_tile_model(tile_dir, fits; physics_member, pscale=:pscale, ΔT=:ΔT, area_km2=nothing)
+function wgms_tile_model(tile_dir, fits; physics_member, pscale=:pscale, ΔT=:ΔT, area_km2=nothing,
+                         mixed_software=false)
     coverage = gemb_tile_coverage(tile_dir)
     paths = gemb_tile_paths(coverage)
     parts = gemb_physics_member_parts(physics_member)
-    gemb_tile_provenance(tile_dir, collect(values(coverage)); physics_member=parts.tile_member)
+    gemb_tile_provenance(tile_dir, collect(values(coverage)); physics_member=parts.tile_member, mixed_software)
     g = parts.precipitation_gradient
     g > 0 && isnothing(area_km2) &&
         error("physics member $(repr(physics_member)) applies a precipitation gradient centred on each " *

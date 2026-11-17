@@ -71,15 +71,17 @@ const gemb_pilot_gradient_forcing_grid = (; pscale=[0.75, 1.0, 1.5, 2.0, 3.0],
 #   tile of their own, calibrated on the geotile groups wholly inside it, and skips the fitted-pscale
 #   check of the reference geotiles.
 # - `allows_gradient`: precipitation-gradient members are defined on its tiles.
+# - `mixed_software`: its tiles may come from different code versions (`software_*` run parameters),
+#   each version and its tiles recorded in the ensemble's provenance (`gemb_tile_provenance`).
 # - `forcing_prior`, `distance_from_origin_penalty`: the forcing prior `(; pscale, log_pscale_sd, ΔT,
 #   ΔT_sd, corr)` and its weight `wd`, re-derived for each run by the temporal cross-validation of
 #   notes/methods_2026-10_seasonal_cycle_and_calibration.md §4 from that run's unpenalized fits.
 #   `nothing` and 0 until then: the calibration is unpenalized.
 const GEMB_RUNS = Dict(
     9 => (; sweep="tile_runs_v2", suffix="v2", partial_coverage=false, allows_gradient=false,
-            forcing_prior=nothing, distance_from_origin_penalty=0.0),
+            mixed_software=true, forcing_prior=nothing, distance_from_origin_penalty=0.0),
     10 => (; sweep="tile_runs_pilot", suffix="pilot", partial_coverage=true, allows_gradient=true,
-             forcing_prior=nothing, distance_from_origin_penalty=0.0),
+             mixed_software=false, forcing_prior=nothing, distance_from_origin_penalty=0.0),
 )
 
 """
@@ -103,8 +105,8 @@ Named tuple with
 - `tile_dir`: directory of the member's tile NetCDF files;
 - `filename_gemb_combined`: path from which the per-mask geotile ensemble files are named;
 - `forcing_grid`: the `(; pscale, ΔT)` nodes the ensemble is read on, or `nothing` for the tiles' own grid;
-- `partial_coverage`, `forcing_prior`, `distance_from_origin_penalty`: the run's settings
-  ([`GEMB_RUNS`](@ref)).
+- `partial_coverage`, `mixed_software`, `forcing_prior`, `distance_from_origin_penalty`: the run's
+  settings ([`GEMB_RUNS`](@ref)).
 
 # Examples
 ```julia
@@ -128,7 +130,7 @@ function gemb_info(; gemb_run_id=9, physics_member)
         filename_gemb_combined="/mnt/bylot-r3/data/gemb/gemb_glacier_sims_tiles_1950to2026_$(run.suffix)_$(member).jld2",
         forcing_grid=!run.partial_coverage ? nothing :
                      gradient ? gemb_pilot_gradient_forcing_grid : gemb_pilot_forcing_grid,
-        run.partial_coverage, run.forcing_prior, run.distance_from_origin_penalty,
+        run.partial_coverage, run.mixed_software, run.forcing_prior, run.distance_from_origin_penalty,
     )
 end
 

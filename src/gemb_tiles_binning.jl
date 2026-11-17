@@ -98,7 +98,8 @@ end
 
 # Each tile is read once for every mask holding its geotile.
 gemb_dv_masks = GlacierHydrology.process_gemb_tiles(masks; gembinfo.tile_dir, date_center, coverage,
-                                                    physics_member=gemb_physics_member, gembinfo.forcing_grid)
+                                                    physics_member=gemb_physics_member, gembinfo.forcing_grid,
+                                                    gembinfo.mixed_software)
 
 for surface_mask in gemb_surface_masks
     gemb_dv0 = gemb_dv_masks[surface_mask]

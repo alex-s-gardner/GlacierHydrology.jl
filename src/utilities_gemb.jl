@@ -741,6 +741,11 @@ software_gemb_glaciersims_tree = "…"
 software_gemb_tree = "…"
 software_gemb_version = "…"
 # … every other software_* parameter the tile files record
+
+[[tile_run_parameter_variants]]   # only for a sweep with mixed software, one per other combination
+tiles = ["…nc", …]
+[tile_run_parameter_variants.tile_run_parameters]
+software_gemb_tree = "…"
 ```
 
 The file is written with `GVC.atomic_write`, so a reader never sees it half written. Returns its path.
@@ -754,8 +759,10 @@ function write_gembfit_provenance(gembfit_file, tile_provenance)
 
     return GVC.atomic_write(gembfit_provenance_file(gembfit_file)) do scratch
         open(scratch, "w") do io
-            TOML.print(io, Dict{String,Any}("tile_dir" => String(tile_dir),
-                                            "tile_run_parameters" => Dict{String,Any}(parameters)); sorted=true)
+            record = merge(Dict{String,Any}(tile_provenance),
+                           Dict{String,Any}("tile_dir" => String(tile_dir),
+                                            "tile_run_parameters" => Dict{String,Any}(parameters)))
+            TOML.print(io, record; sorted=true)
         end
     end
 end

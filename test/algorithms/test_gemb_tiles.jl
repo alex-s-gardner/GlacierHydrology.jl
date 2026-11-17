@@ -244,6 +244,36 @@ referenced(per_interval) = (c = cumsum(per_interval); c .- first(c))
             DataFrame(id=ids), area; tile_dir=mixed, date_center=[Date(2000, 2, 15)], show_stats=false,
             physics_member="B-kfit-table")
 
+        # A sweep allowed mixed software records the majority combination and each variant's tiles;
+        # the physics member must still agree.
+        third = write_test_tile(joinpath(mixed, "tile_3.nc"), times, [1050.0]; flux...,
+                                geotile_id="lat[+60+62]lon[-138-136]", run_parameters=other)
+        mixed_tiles = collect(values(GlacierHydrology.gemb_tile_coverage(mixed)))
+        allowed = GlacierHydrology.gemb_tile_provenance(mixed, mixed_tiles; physics_member="B-kfit-table",
+                                                        mixed_software=true)
+        @test allowed["tile_run_parameters"] == other
+        @test allowed["tile_run_parameter_variants"] ==
+              [Dict{String,Any}("tile_run_parameters" => software, "tiles" => ["tile_1.nc"])]
+        @test !haskey(provenance, "tile_run_parameter_variants")
+        mixed_sidecar = GlacierHydrology.write_gembfit_provenance(joinpath(mktempdir(), "mixed_gembfit.arrow"), allowed)
+        @test TOML.parsefile(mixed_sidecar) == Dict{String,Any}("tile_dir" => realpath(mixed),
+                                                               "tile_run_parameters" => other,
+                                                               "tile_run_parameter_variants" => allowed["tile_run_parameter_variants"])
+        mixed_gemb = GlacierHydrology.process_gemb_tiles(DataFrame(id=ids), area; tile_dir=mixed,
+                                                         date_center=dates, show_stats=false,
+                                                         physics_member="B-kfit-table", mixed_software=true)
+        # Only the files read count: tiles 1 and 2 tie, and the tie goes to the first file.
+        read_provenance = DimensionalData.metadata(mixed_gemb)["tile_provenance"]
+        @test read_provenance["tile_run_parameters"] == software
+        @test read_provenance["tile_run_parameter_variants"] ==
+              [Dict{String,Any}("tile_run_parameters" => other, "tiles" => ["tile_2.nc"])]
+        other_member = merge(other, Dict{String,Any}("physics_member" => "C-kfit-table"))
+        write_test_tile(joinpath(mixed, "tile_4.nc"), times, [1050.0]; flux...,
+                        geotile_id="lat[+60+62]lon[-136-134]", run_parameters=other_member)
+        @test_throws "members must not be mixed" GlacierHydrology.gemb_tile_provenance(
+            mixed, collect(values(GlacierHydrology.gemb_tile_coverage(mixed))); physics_member="B-kfit-table",
+            mixed_software=true)
+
         untraced = mkpath(joinpath(mktempdir(), "tile_runs_untraced"))
         partial = Dict{String,Any}(k => v for (k, v) in software if k != "software_gemb_glaciersims_tree")
         untraced_path = write_test_tile(joinpath(untraced, "tile.nc"), times, [1050.0]; flux...,
