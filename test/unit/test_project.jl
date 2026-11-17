@@ -57,6 +57,7 @@ using Statistics
 
         # The run's settings: the pilot covers a subset of tiles, and neither run has a forcing prior yet.
         @test run9.gemb_run_id == 9 && !run9.partial_coverage
+        @test run9.mixed_software && !run10.mixed_software
         @test run10.partial_coverage
         @test all(isnothing(i.forcing_prior) && iszero(i.distance_from_origin_penalty) for i in (run9, run10))
     end
