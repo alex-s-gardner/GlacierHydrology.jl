@@ -39,16 +39,23 @@ begin
 
     gembinfo = GlacierHydrology.gemb_info(; gemb_run_id, physics_member=gemb_physics_member)
 
-    # Date bins: the altimetry's, from 1970. Every altimetry bin then has a GEMB bin with the same
-    # label, which `gemb_calibration` requires.
-    _, date_center = GVC.project_date_bins(; start=Date(1970, 1, 1))
-
     # Every geotile holding ice is processed. Those the sweep covers are read from their own tile; the
     # rest borrow the nearest one and are rebinned onto their own hypsometry by `process_gemb_tiles`,
     # which reports each substitution. Only tiles spanning the whole date axis are eligible, as donor or
     # otherwise: a partial one would arrive partly NaN and fail the checks below with no indication of
     # why, and the directory also accumulates shorter development sweeps.
     coverage = GlacierHydrology.gemb_tile_coverage(gembinfo.tile_dir)
+
+    # Date bins: the altimetry's, from 1970, up to the last bin centre the sweep's record reaches. The
+    # record end is the one most tiles share, so a shorter development sweep in the directory does not
+    # shorten the axis, and a sweep rerun over a longer forcing record extends it. Every bin then
+    # carries the altimetry's label, which `gemb_calibration` requires; it fits over the dates both
+    # share.
+    tile_ends = [t.last for t in values(coverage)]
+    record_end = argmax(e -> count(==(e), tile_ends), unique(tile_ends))
+    _, date_center = GVC.project_date_bins(; start=Date(1970, 1, 1))
+    date_center = date_center[DateTime.(date_center) .<= record_end]
+    println("tile record end: $(record_end), shared by $(count(==(record_end), tile_ends)) of $(length(tile_ends)) tiles")
     available = GlacierHydrology.gemb_tile_paths(coverage; covering=(first(date_center), last(date_center)))
     println("tile files: $(length(coverage)), of which $(length(available)) span the date axis")
     println("dates: $(length(date_center)) bins, $(first(date_center)) .. $(last(date_center))")

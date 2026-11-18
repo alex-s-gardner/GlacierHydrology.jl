@@ -638,11 +638,14 @@ function individual_geotile_synthesis_gembfit_dv(binned_synthesized_file, gemb, 
     # altimetry dm
     geotiles0[!, :dm_altim] = copy(geotiles0[!, :dv_altim])
 
+    # The altimetry record can extend past the GEMB record. Its mass needs GEMB's firn air content, so
+    # it is NaN on altimetry dates outside the GEMB dates rather than extrapolated.
     decyear_fac = decimalyear.(colmetadata(geotiles0, "fac", "date"))
     decyear_altim = decimalyear.(colmetadata(geotiles0, "dv_altim", "date"))
+    within_gemb = first(decyear_fac) .<= decyear_altim .<= last(decyear_fac)
     for r in eachrow(geotiles0)
         itp = DataInterpolations.LinearInterpolation(r.fac, decyear_fac)
-        fac = itp(decyear_altim)
+        fac = [w ? itp(t) : NaN for (w, t) in zip(within_gemb, decyear_altim)]
         r.dm_altim = (r.dv_altim .- fac) .* volume2mass # in units of Gt
     end
 
