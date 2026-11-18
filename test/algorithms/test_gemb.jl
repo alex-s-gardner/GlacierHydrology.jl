@@ -152,6 +152,18 @@ using Logging
             f, pscale_grid, ΔT_grid; stride)
     end
 
+    @testset "_finite_date_span: the dates on which any element is finite" begin
+        dates = Date(2000, 1, 15):Month(1):Date(2000, 6, 15)
+        x = DimArray(fill(NaN, 2, 6, 3), (Dim{:geotile}(["a", "b"]), Dim{:date}(collect(dates)), Dim{:height}(1:3)))
+        # The first geotile and height are NaN throughout; the span comes from the rest.
+        x[geotile=At("b"), date=2:5, height=At(3)] .= 1.0
+        @test GlacierHydrology._finite_date_span(x, "x") == (Date(2000, 2, 15), Date(2000, 5, 15))
+        x[geotile=At("a"), date=1, height=At(2)] = 0.0
+        @test GlacierHydrology._finite_date_span(x, "x") == (Date(2000, 1, 15), Date(2000, 5, 15))
+        @test_throws "the altimetry holds no finite value on any date" GlacierHydrology._finite_date_span(
+            fill(NaN, dims(x)), "the altimetry")
+    end
+
     @testset "gemb_bestfit_grouped warns about and labels fits at a grid bound" begin
         dgeotile = Dim{:geotile}(["lat[+60+62]lon[-142-140]", "lat[+62+64]lon[-142-140]"])
         ddate = Dim{:date}(Date(2000, 1, 15):Month(1):Date(2009, 12, 15))

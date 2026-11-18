@@ -430,11 +430,11 @@ function gemb_calibration(
 
         ddate = dims(dv_altim0, :date)
         ddate_gemb = dims(dv_gemb, :date)
-        index = .!isnan.(dv_gemb[geotile=1, pscale=1, ΔT=1])
-        ex_gemb = extrema(ddate_gemb[index])
-        index = .!isnan.(GVC.read_volume_height(GVC.volume_product_path(first(path2runs))).dh[geotile=1, height=1])
-        ex_dv = extrema(ddate[vec(index)])
+        ex_gemb = _finite_date_span(dv_gemb, "the GEMB ensemble")
+        ex_dv = _finite_date_span(dv_altim0, first(path2runs))
         ex = max(ex_gemb[1], ex_dv[1]), min(ex_gemb[2], ex_dv[2])
+        ex[1] <= ex[2] ||
+            error("GEMB ($(ex_gemb)) and the altimetry ($(ex_dv)) share no dates: $(first(path2runs))")
         index_dv = (ddate .>= ex[1]) .& (ddate .<= ex[2])
         index_gemb = (ddate_gemb .>= ex[1]) .& (ddate_gemb .<= ex[2])
         ddate[index_dv].val == ddate_gemb[index_gemb].val ||
@@ -713,6 +713,16 @@ function _gemb_ensemble_tile_provenance(path, tile_dir)
     isdir(tile_dir) && provenance["tile_dir"] == realpath(tile_dir) ||
         error("$(path) was built from the tile files in $(provenance["tile_dir"]), not $(tile_dir)")
     return provenance
+end
+
+# First and last date on which any element of `x` (a DimArray with a `:date` dimension) is finite.
+# `what` names `x` in the error thrown when no element is.
+function _finite_date_span(x, what)
+    d = DD.dimnum(x, :date)
+    finite = vec(mapreduce(isfinite, |, x; dims=Tuple(i for i in 1:ndims(x) if i != d), init=false))
+    any(finite) || error("$(what) holds no finite value on any date")
+    dates = val(dims(x, :date))[finite]
+    return first(dates), last(dates)
 end
 
 """
