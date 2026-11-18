@@ -165,6 +165,26 @@ using Dates
             @test "dv_trend_[km³/yr]" in names(table)
         end
 
+        @testset "runs2rgi leaves out geotiles without altimetry up to a fraction of the glacier area" begin
+            # Geotile 1 is given no altimetry and the area that makes it `frac` of the run's glacier.
+            rest = sum(area_total[2:end])
+            unobserved(frac) = begin
+                o = deepcopy(out)
+                o.area_km2 = [[a] for a in area_total]
+                o.area_km2[1] .= frac * rest / (1 - frac)
+                fill!(o.dv_altim[1], NaN)
+                f = joinpath(dir, "glacier_dh_best_nmad4_v01_filled_ac_p1_synthesized.jld2")
+                GlacierHydrology.FileIO.save(GlacierHydrology.gembfit_dv_path(f, member), Dict("geotiles" => o))
+                f
+            end
+            limit = GlacierHydrology.RUNS2RGI_UNOBSERVED_FRACTION_MAXIMUM
+            # Below the limit the geotile is left out, so its NaN altimetry does not reach the sums.
+            kept = GlacierHydrology.runs2rgi([unobserved(limit / 2)]; physics_member=member)
+            @test all(isfinite, kept["dm_altim"][rgi=At(99)])
+            @test_throws "too much to leave out of the regional sums" GlacierHydrology.runs2rgi(
+                [unobserved(2 * limit)]; physics_member=member)
+        end
+
         @testset "runs2rgi throws on an unexpected units tag" begin
             bad = joinpath(dir, "glacier_dh_best_nmad3_v01_filled_ac_p1_synthesized.jld2")
             out_bad = copy(out)
