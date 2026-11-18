@@ -400,7 +400,7 @@ function gemb_calibration(
     # constrained, so it scatters between local minima across ensemble members rather than tracking one
     # value. A geotile whose ΔT sits at a grid bound cannot be held to a narrow pscale.
     dgeotile_test = Dim{:geotile}([geotiles_golden_test[1], "lat[+58+60]lon[-138-136]"])
-    pscale_range_test = DimStack(DimArray([1.3, 1.0], dgeotile_test; name="min"), DimArray([3.0, 2.9], dgeotile_test; name="max"))
+    pscale_range_test = DimStack(DimArray([1.3, 1.0], dgeotile_test; name="min"), DimArray([3.0, 3.5], dgeotile_test; name="max"))
 
     # Process each surface mask to load aligned geotiles
     geotiles = Dict()
