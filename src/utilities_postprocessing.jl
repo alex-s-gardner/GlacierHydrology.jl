@@ -76,6 +76,10 @@ function _check_reporting_unit(geotiles0, varname, path)
     return nothing
 end
 
+# Largest fraction of a run's glacier area its geotiles without altimetry may hold before `runs2rgi`
+# refuses to leave them out of the regional sums: 1e-4 is about 70 km² of the global ~700,000 km².
+const RUNS2RGI_UNOBSERVED_FRACTION_MAXIMUM = 1e-4
+
 """
     runs2rgi(path2runs, vars2sum=["dv_altim", "runoff", "fac", "smb", "rain", "acc", "melt", "ec", "refreeze", "dv", "dm", "dm_altim", "discharge"])
 
@@ -91,8 +95,9 @@ metadata (`"km3"` or `"Gt"`).
 
 Geotiles with no altimetry at all (`dv_altim` NaN at every date) are left out of every sum: they have no
 calibrated fit and carry NaN `dv`, `dm` and `discharge`, which would otherwise make their whole region
-NaN. They are the sub-km² ice fragments GEMB covers but the binning drops; an error is thrown if those
-left out of any run hold 1 km² of glacier or more, and they are listed once per call.
+NaN. They are ice fragments GEMB covers but the binning drops; an error is thrown if those left out of
+any run hold `RUNS2RGI_UNOBSERVED_FRACTION_MAXIMUM` (1e-4) of its glacier area or more, and they are
+listed once per call.
 
 # Arguments
 - `path2runs`: Vector of paths to model run files
@@ -140,8 +145,11 @@ function runs2rgi(path2runs; physics_member=gemb_reference_physics_member, vars2
         no_altim = [all(isnan, x) for x in geotiles0.dv_altim]
         if any(no_altim)
             area = sum(sum.(geotiles0.area_km2[no_altim]))
-            area < 1 || error("$(binned_synthesized_dv_file): geotiles without altimetry hold $(round(area; digits=2)) km² " *
-                              "of glacier, too much to leave out of the regional sums: $(geotiles0.id[no_altim])")
+            fraction = area / sum(sum.(geotiles0.area_km2))
+            fraction < RUNS2RGI_UNOBSERVED_FRACTION_MAXIMUM ||
+                error("$(binned_synthesized_dv_file): geotiles without altimetry hold $(round(area; digits=2)) km² " *
+                      "($(round(100 * fraction; sigdigits=2)) % of the glacier area), too much to leave out of " *
+                      "the regional sums: $(geotiles0.id[no_altim])")
             unobserved[i] = geotiles0.id[no_altim]
             geotiles0 = geotiles0[.!no_altim, :]
         end
